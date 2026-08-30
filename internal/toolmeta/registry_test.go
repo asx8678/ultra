@@ -9,13 +9,17 @@ import (
 func TestRegistryIsUniqueAndComplete(t *testing.T) {
 	t.Parallel()
 	seen := make(map[string]struct{})
+	defaultCount := 0
 	for _, descriptor := range All() {
 		require.NotEmpty(t, descriptor.Name)
 		_, duplicate := seen[descriptor.Name]
 		require.False(t, duplicate, "duplicate descriptor %q", descriptor.Name)
 		seen[descriptor.Name] = struct{}{}
+		if descriptor.DefaultEnabled {
+			defaultCount++
+		}
 	}
-	require.Len(t, DefaultNames(), len(seen))
+	require.Len(t, DefaultNames(), defaultCount)
 }
 
 func TestTaskDefaultsPreserveConservativeSurface(t *testing.T) {
