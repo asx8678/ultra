@@ -1,4 +1,4 @@
-//go:build fabric_sandbox
+//go:build !fabric_disabled
 
 package agent
 
@@ -8,12 +8,14 @@ import (
 	"sync"
 
 	"charm.land/fantasy"
+	"github.com/asx8678/ultra/internal/agent/notify"
 	"github.com/asx8678/ultra/internal/agent/tools"
 	"github.com/asx8678/ultra/internal/fabric"
 	"github.com/asx8678/ultra/internal/fabric/esbuildcompiler"
 	"github.com/asx8678/ultra/internal/fabric/gojasandbox"
 	"github.com/asx8678/ultra/internal/hooks"
 	"github.com/asx8678/ultra/internal/permission"
+	"github.com/asx8678/ultra/internal/pubsub"
 )
 
 var errFabricRuntimeClosed = errors.New("fabric runtime is closed")
@@ -27,7 +29,10 @@ type ultraFabricRuntime struct {
 	closed   bool
 }
 
-func newFabricRuntime(permissions permission.Service) (fabricRuntime, error) {
+func newFabricRuntime(
+	permissions permission.Service,
+	publisher pubsub.Publisher[notify.Notification],
+) (fabricRuntime, error) {
 	registry := fabric.NewRegistry()
 	sandbox := gojasandbox.NewGojaSandbox()
 	runtime := &ultraFabricRuntime{
@@ -41,6 +46,16 @@ func newFabricRuntime(permissions permission.Service) (fabricRuntime, error) {
 		Authorizer: tools.UltraFabricAuthorizer{Permissions: permissions},
 		Approvals:  tools.UltraFabricApprovals{},
 		Limits:     fabric.DefaultJSONLimits(),
+		Activity: func(activity fabric.ExecutionActivity) {
+			if publisher == nil {
+				return
+			}
+			publisher.Publish(pubsub.UpdatedEvent, notify.Notification{
+				SessionID:      activity.SessionID,
+				Type:           notify.TypeFabricActivity,
+				FabricActivity: &activity,
+			})
+		},
 	}
 	return runtime, nil
 }

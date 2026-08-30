@@ -48,6 +48,9 @@ Thumbs.db
 **/.crush/**
 
 /crush
+/ultra
+/ultra-fabric
+/ultra-without-fabric
 /tmp/
 
 manpages/

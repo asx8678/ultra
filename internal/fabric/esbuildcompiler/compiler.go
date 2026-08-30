@@ -1,4 +1,4 @@
-//go:build fabric_sandbox
+//go:build !fabric_disabled
 
 // Package esbuildcompiler implements Fabric's pragmatic TypeScript compiler.
 package esbuildcompiler

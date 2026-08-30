@@ -51,14 +51,26 @@ option metrics YES`
 func TestOption_Fabric(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "ultrarc")
-	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(`option fabric true`))
-	require.NoError(t, err)
+	for _, tt := range []struct {
+		name    string
+		value   string
+		enabled bool
+	}{
+		{name: "explicitly enabled", value: "true", enabled: true},
+		{name: "explicitly disabled", value: "false", enabled: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "ultrarc")
+			jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(`option fabric `+tt.value))
+			require.NoError(t, err)
 
-	var result map[string]any
-	require.NoError(t, json.Unmarshal(jsonBytes, &result))
-	fabric := result["options"].(map[string]any)["fabric"].(map[string]any)
-	require.Equal(t, true, fabric["enabled"])
+			var result map[string]any
+			require.NoError(t, json.Unmarshal(jsonBytes, &result))
+			fabric := result["options"].(map[string]any)["fabric"].(map[string]any)
+			require.Equal(t, tt.enabled, fabric["enabled"])
+		})
+	}
 }
 
 func TestOption_String(t *testing.T) {

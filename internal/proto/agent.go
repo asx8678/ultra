@@ -3,15 +3,18 @@ package proto
 import (
 	"encoding/json"
 	"errors"
+
+	"github.com/asx8678/ultra/internal/fabric"
 )
 
 // AgentEventType represents the type of agent event.
 type AgentEventType string
 
 const (
-	AgentEventTypeError     AgentEventType = "error"
-	AgentEventTypeResponse  AgentEventType = "response"
-	AgentEventTypeSummarize AgentEventType = "summarize"
+	AgentEventTypeError          AgentEventType = "error"
+	AgentEventTypeResponse       AgentEventType = "response"
+	AgentEventTypeSummarize      AgentEventType = "summarize"
+	AgentEventTypeFabricActivity AgentEventType = "fabric_activity"
 )
 
 // MarshalText implements the [encoding.TextMarshaler] interface.
@@ -52,6 +55,10 @@ type AgentEvent struct {
 	// result's failure text travels through Error, like TypeAgentError.
 	AWSSOCommand string `json:"aws_sso_command,omitempty"`
 	AWSSOURL     string `json:"aws_sso_url,omitempty"`
+
+	// FabricActivity carries best-effort live Fabric state to remote TUI
+	// clients. The terminal tool result trace remains authoritative.
+	FabricActivity *fabric.ExecutionActivity `json:"fabric_activity,omitempty"`
 }
 
 // MarshalJSON implements the [json.Marshaler] interface.

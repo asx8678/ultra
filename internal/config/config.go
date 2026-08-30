@@ -366,10 +366,10 @@ func (Attribution) JSONSchemaExtend(schema *jsonschema.Schema) {
 	}
 }
 
-// FabricOptions gates the experimental programmable capability runtime.
-// Enabling it also requires a binary built with the fabric_sandbox tag.
+// FabricOptions configures the programmable capability runtime. Fabric is
+// enabled by default; set Enabled to false to opt out.
 type FabricOptions struct {
-	Enabled bool `json:"enabled,omitempty" jsonschema:"description=Enable the experimental fabric_exec programmable tool,default=false"`
+	Enabled bool `json:"enabled,omitempty" jsonschema:"description=Enable the fabric_exec programmable tool,default=true"`
 }
 
 type Options struct {
@@ -394,12 +394,19 @@ type Options struct {
 	Progress                  *bool          `json:"progress,omitempty" jsonschema:"description=Show indeterminate progress updates during long operations,default=true"`
 	Notifications             string         `json:"notifications,omitempty" jsonschema:"description=Notification style to use. Options: auto (default)\\, native\\, osc\\, bell\\, disabled. Auto selects based on environment: native for local sessions\\, osc for SSH (with automatic OSC 99/777 detection).,enum=auto,enum=native,enum=osc,enum=bell,enum=disabled,default=auto"`
 	DisabledSkills            []string       `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=ultra-config"`
-	Fabric                    *FabricOptions `json:"fabric,omitempty" jsonschema:"description=Experimental Fabric programmable-tool options"`
+	Fabric                    *FabricOptions `json:"fabric,omitempty" jsonschema:"description=Fabric programmable-tool options"`
 }
 
-// FabricEnabled reports whether the experimental programmable tool is opted in.
+// FabricEnabled reports whether the programmable tool is enabled. An absent
+// Fabric section uses the default-enabled behavior.
 func (o *Options) FabricEnabled() bool {
-	return o != nil && o.Fabric != nil && o.Fabric.Enabled
+	if o == nil {
+		return false
+	}
+	if o.Fabric == nil {
+		return fabricDefaultEnabled
+	}
+	return o.Fabric.Enabled
 }
 
 type MCPs map[string]MCPConfig
@@ -907,8 +914,8 @@ func filterSlice(data []string, mask []string, include bool) []string {
 
 func (c *Config) SetupAgents() {
 	defaultTools := toolmeta.DefaultNames()
-	if c.Options.FabricEnabled() {
-		defaultTools = append(defaultTools, "fabric_exec")
+	if !c.Options.FabricEnabled() {
+		defaultTools = filterSlice(defaultTools, []string{"fabric_exec"}, false)
 	}
 	allowedTools := resolveAllowedTools(defaultTools, c.Options.DisabledTools)
 

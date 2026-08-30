@@ -7,6 +7,7 @@ import (
 
 	"github.com/asx8678/ultra/internal/agent/notify"
 	"github.com/asx8678/ultra/internal/agent/tools/mcp"
+	"github.com/asx8678/ultra/internal/fabric"
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
@@ -154,6 +155,29 @@ func TestAgentErrorToProto_PreservesRunID(t *testing.T) {
 		"RunID must survive so observers can attribute the error to its run")
 	require.NotNil(t, decoded.Payload.Error)
 	require.Equal(t, "boom", decoded.Payload.Error.Error())
+}
+
+func TestFabricActivityToProtoPreservesLiveState(t *testing.T) {
+	t.Parallel()
+
+	activity := &fabric.ExecutionActivity{
+		Kind: fabric.ActivityCallStarted, ExecutionID: "execution-1",
+		ParentToolCallID: "tool-1", SessionID: "session-1",
+		Sequence: 2, Ref: "host.view", CapabilityViewID: "view:3",
+	}
+	env := wrapEvent(pubsub.Event[notify.Notification]{
+		Type: pubsub.UpdatedEvent,
+		Payload: notify.Notification{
+			SessionID: "session-1", Type: notify.TypeFabricActivity,
+			FabricActivity: activity,
+		},
+	})
+	require.NotNil(t, env)
+
+	var decoded pubsub.Event[proto.AgentEvent]
+	require.NoError(t, json.Unmarshal(env.Payload, &decoded))
+	require.Equal(t, proto.AgentEventTypeFabricActivity, decoded.Payload.Type)
+	require.Equal(t, activity, decoded.Payload.FabricActivity)
 }
 
 // TestRunCompleteToProto_Error verifies that error- and cancel-shaped

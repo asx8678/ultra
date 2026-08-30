@@ -3,6 +3,8 @@
 // events without importing UI packages.
 package notify
 
+import "github.com/asx8678/ultra/internal/fabric"
+
 // Type identifies the kind of agent notification.
 type Type string
 
@@ -15,6 +17,9 @@ const (
 	// TypeAgentError indicates the agent's turn terminated with an
 	// error. The error text is carried in Notification.Message.
 	TypeAgentError Type = "error"
+	// TypeFabricActivity carries a best-effort live Fabric phase or nested-call
+	// update. The terminal Fabric trace remains authoritative.
+	TypeFabricActivity Type = "fabric_activity"
 	// TypeAWSSSOAuth indicates AWS SSO credentials have expired and the
 	// coordinator is running the configured refresh command. It opens the
 	// AWS SSO dialog; a follow-up with the same type carries the SSO URL
@@ -42,6 +47,8 @@ type Notification struct {
 	// Message carries the error text for TypeAgentError. Other
 	// notification types ignore it.
 	Message string
+	// FabricActivity is set for TypeFabricActivity notifications.
+	FabricActivity *fabric.ExecutionActivity
 	// AWSSOCommand carries the shell command for TypeAWSSSOAuth.
 	AWSSOCommand string
 	// AWSSOURL carries the SSO verification URL for TypeAWSSSOAuth once it

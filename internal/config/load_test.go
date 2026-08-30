@@ -815,6 +815,13 @@ func TestConfig_IsConfigured(t *testing.T) {
 	})
 }
 
+func expectedCoderTools(tools ...string) []string {
+	if !fabricDefaultEnabled {
+		return tools
+	}
+	return append([]string{"fabric_exec"}, tools...)
+}
+
 func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 	cfg := &Config{
 		Options: &Options{
@@ -825,28 +832,40 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, toolmeta.DefaultNames(), coderAgent.AllowedTools)
+	expectedTools := toolmeta.DefaultNames()
+	if !fabricDefaultEnabled {
+		expectedTools = filterSlice(expectedTools, []string{"fabric_exec"}, false)
+	}
+	assert.Equal(t, expectedTools, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
 	assert.Equal(t, []string{"lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
 }
 
-func TestConfig_setupAgentsFabricRequiresExplicitOptIn(t *testing.T) {
+func TestConfig_setupAgentsFabricDefaultsOnAndSupportsOptOut(t *testing.T) {
 	t.Parallel()
 
-	disabled := &Config{Options: &Options{}}
-	disabled.SetupAgents()
-	require.NotContains(t, disabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
+	defaults := &Config{Options: &Options{}}
+	defaults.SetupAgents()
+	if fabricDefaultEnabled {
+		require.Contains(t, defaults.Agents[AgentCoder].AllowedTools, "fabric_exec")
+	} else {
+		require.NotContains(t, defaults.Agents[AgentCoder].AllowedTools, "fabric_exec")
+	}
+	require.NotContains(t, defaults.Agents[AgentTask].AllowedTools, "fabric_exec")
 
 	enabled := &Config{Options: &Options{Fabric: &FabricOptions{Enabled: true}}}
 	enabled.SetupAgents()
 	require.Contains(t, enabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
-	require.NotContains(t, enabled.Agents[AgentTask].AllowedTools, "fabric_exec")
 
-	enabled.Options.DisabledTools = []string{"fabric_exec"}
-	enabled.SetupAgents()
-	require.NotContains(t, enabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
+	disabled := &Config{Options: &Options{Fabric: &FabricOptions{Enabled: false}}}
+	disabled.SetupAgents()
+	require.NotContains(t, disabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
+
+	disabledByTool := &Config{Options: &Options{DisabledTools: []string{"fabric_exec"}}}
+	disabledByTool.SetupAgents()
+	require.NotContains(t, disabledByTool.Agents[AgentCoder].AllowedTools, "fabric_exec")
 }
 
 func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
@@ -864,7 +883,7 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
 
-	assert.Equal(t, []string{"agent", "bash", "ultra_info", "ultra_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "question", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, expectedCoderTools("agent", "bash", "ultra_info", "ultra_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "question", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource"), coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
@@ -890,7 +909,7 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "bash", "ultra_info", "ultra_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "question", "todos", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, expectedCoderTools("agent", "bash", "ultra_info", "ultra_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "question", "todos", "write", "list_mcp_resources", "read_mcp_resource"), coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)

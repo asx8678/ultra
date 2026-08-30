@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -143,4 +144,67 @@ func TestFabricExecReturnsBoundedJSON(t *testing.T) {
 	encoded, err := json.Marshal(result)
 	require.NoError(t, err)
 	require.True(t, json.Valid(encoded))
+}
+
+func TestFabricExecPublishesLivePhaseAndCallActivity(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	provider := &pipelineProvider{}
+	provider.name = "host"
+	provider.actions = []ActionDescriptor{pipelineDescriptor()}
+	lease, err := registry.RegisterProvider(t.Context(), provider, RegisterOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lease.Dispose()) })
+
+	var mu sync.Mutex
+	var activities []ExecutionActivity
+	service := &ExecutionService{
+		Registry: registry,
+		Compiler: compilerFunc(func(context.Context, CompileRequest) (CompileResult, error) {
+			return CompileResult{JavaScript: "program"}, nil
+		}),
+		Sandbox: sandboxFunc(func(ctx context.Context, request SandboxExecutionRequest) (SandboxExecutionResult, error) {
+			value, callErr := request.Bridge.Call(ctx, "host.run", JSONObject{
+				"value": "ok", "prepared": true,
+			})
+			return SandboxExecutionResult{Outcome: OutcomeSucceeded, Value: value}, callErr
+		}),
+		Authorizer: authorizerFunc(func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
+			return AuthorizationDecision{Allowed: true}, nil
+		}),
+		Approvals: approvalFunc(func(context.Context, ApprovalRequest) (ApprovalDecision, error) {
+			return ApprovalDecision{Kind: ApprovalAllow, Scope: ApprovalOnce}, nil
+		}),
+		Activity: func(activity ExecutionActivity) {
+			mu.Lock()
+			defer mu.Unlock()
+			activities = append(activities, activity)
+		},
+	}
+	result := service.Execute(t.Context(), FabricExecRequest{Code: "return host.run({})"}, OuterInvocationContext{
+		ExecutionID: "execution-live", ParentToolCallID: "tool-live", SessionID: "session-live",
+	})
+	require.Equal(t, OutcomeSucceeded, result.Outcome, result.Error)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, activities, 4)
+	require.Equal(t, ActivityPhase, activities[0].Kind)
+	require.Equal(t, "compile", activities[0].Phase)
+	require.NotEmpty(t, activities[0].CapabilityViewID)
+	require.Equal(t, 1, activities[0].CapabilityCount)
+	require.Equal(t, []string{"host"}, activities[0].Providers)
+	require.Equal(t, ActivityPhase, activities[1].Kind)
+	require.Equal(t, "execute", activities[1].Phase)
+	require.Equal(t, ActivityCallStarted, activities[2].Kind)
+	require.Equal(t, uint64(1), activities[2].Sequence)
+	require.Equal(t, "host.run", activities[2].Ref)
+	require.Equal(t, ActivityCallCompleted, activities[3].Kind)
+	require.Equal(t, OutcomeSucceeded, activities[3].Outcome)
+	for _, activity := range activities {
+		require.Equal(t, "execution-live", activity.ExecutionID)
+		require.Equal(t, "tool-live", activity.ParentToolCallID)
+		require.Equal(t, "session-live", activity.SessionID)
+	}
 }

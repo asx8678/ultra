@@ -1,4 +1,4 @@
-//go:build fabric_sandbox
+//go:build !fabric_disabled
 
 package esbuildcompiler
 

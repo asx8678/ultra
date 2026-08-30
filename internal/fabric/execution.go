@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 )
@@ -94,6 +95,33 @@ type OuterInvocationContext struct {
 	HostID           string
 }
 
+// ExecutionActivityKind identifies a best-effort live execution update.
+type ExecutionActivityKind string
+
+const (
+	ActivityPhase         ExecutionActivityKind = "phase"
+	ActivityCallStarted   ExecutionActivityKind = "call.started"
+	ActivityCallCompleted ExecutionActivityKind = "call.completed"
+)
+
+// ExecutionActivity is a bounded presentation update. The terminal execution
+// trace remains authoritative if an activity update is dropped.
+type ExecutionActivity struct {
+	Kind             ExecutionActivityKind `json:"kind"`
+	ExecutionID      string                `json:"execution_id"`
+	ParentToolCallID string                `json:"parent_tool_call_id"`
+	SessionID        string                `json:"session_id,omitempty"`
+	Sequence         uint64                `json:"sequence,omitempty"`
+	Phase            string                `json:"phase,omitempty"`
+	Ref              string                `json:"ref,omitempty"`
+	CapabilityViewID string                `json:"capability_view_id,omitempty"`
+	CapabilityCount  int                   `json:"capability_count,omitempty"`
+	Providers        []string              `json:"providers,omitempty"`
+	Outcome          ExecutionOutcome      `json:"outcome,omitempty"`
+	FailureStage     FailureStage          `json:"failure_stage,omitempty"`
+	Error            string                `json:"error,omitempty"`
+}
+
 // FabricExecResult is the bounded outer tool result.
 type FabricExecResult struct {
 	ExecutionID string              `json:"execution_id"`
@@ -125,6 +153,9 @@ type ExecutionService struct {
 	Approvals  ApprovalController
 	Budgets    BudgetLedger
 	Limits     JSONLimits
+	// Activity receives lossy, presentation-only execution updates. Callers
+	// must use FabricExecResult.Trace as the authoritative record.
+	Activity func(ExecutionActivity)
 }
 
 // Execute runs one complete Fabric execution.
@@ -159,6 +190,10 @@ func (s *ExecutionService) Execute(
 	defer view.Release()
 
 	trace.Phase("compile")
+	compileActivity := capabilityActivity(view)
+	compileActivity.Kind = ActivityPhase
+	compileActivity.Phase = "compile"
+	s.publishActivity(outer, compileActivity)
 	declarations, err := s.Registry.Declarations(view)
 	if err != nil {
 		result.Error = err.Error()
@@ -201,6 +236,7 @@ func (s *ExecutionService) Execute(
 		budgets: newExecutionBudget(request.AgentBudget, s.Budgets),
 	}
 	trace.Phase("execute")
+	s.publishActivity(outer, ExecutionActivity{Kind: ActivityPhase, Phase: "execute"})
 	sandboxResult, sandboxErr := s.Sandbox.Execute(executionCtx, SandboxExecutionRequest{
 		JavaScript:       compiled.JavaScript,
 		SourceMap:        compiled.SourceMap,
@@ -252,6 +288,39 @@ func (s *ExecutionService) Execute(
 	return result
 }
 
+func capabilityActivity(view *CapabilityView) ExecutionActivity {
+	if view == nil {
+		return ExecutionActivity{}
+	}
+	bindings := view.Bindings()
+	providerSet := make(map[string]struct{})
+	for _, binding := range bindings {
+		if binding.Provider != "" {
+			providerSet[binding.Provider] = struct{}{}
+		}
+	}
+	providers := make([]string, 0, len(providerSet))
+	for provider := range providerSet {
+		providers = append(providers, provider)
+	}
+	slices.Sort(providers)
+	return ExecutionActivity{
+		CapabilityViewID: view.ID(),
+		CapabilityCount:  len(bindings),
+		Providers:        providers,
+	}
+}
+
+func (s *ExecutionService) publishActivity(outer OuterInvocationContext, activity ExecutionActivity) {
+	if s == nil || s.Activity == nil {
+		return
+	}
+	activity.ExecutionID = outer.ExecutionID
+	activity.ParentToolCallID = outer.ParentToolCallID
+	activity.SessionID = outer.SessionID
+	s.Activity(activity)
+}
+
 func (s *ExecutionService) validateExecutionRequest(request FabricExecRequest) error {
 	if len(request.Code) > MaxSourceBytes {
 		return fmt.Errorf("fabric source exceeds %d bytes", MaxSourceBytes)
@@ -292,8 +361,13 @@ type executionBridge struct {
 }
 
 func (b *executionBridge) Call(ctx context.Context, ref string, args JSONObject) (JSONValue, error) {
-	nestedToolCallID := fmt.Sprintf("%s:%d", b.outer.ParentToolCallID, b.nextCall.Add(1))
-	return b.service.Registry.Invoke(ctx, InvokeRequest{
+	sequence := b.nextCall.Add(1)
+	nestedToolCallID := fmt.Sprintf("%s:%d", b.outer.ParentToolCallID, sequence)
+	activityRef, _ := projectTraceString(ref)
+	b.service.publishActivity(b.outer, ExecutionActivity{
+		Kind: ActivityCallStarted, Sequence: sequence, Ref: activityRef,
+	})
+	value, err := b.service.Registry.Invoke(ctx, InvokeRequest{
 		View: b.view,
 		Ref:  ref,
 		Args: args,
@@ -312,6 +386,31 @@ func (b *executionBridge) Call(ctx context.Context, ref string, args JSONObject)
 		Trace:      b.trace,
 		Limits:     b.service.Limits,
 	})
+	activity := ExecutionActivity{
+		Kind: ActivityCallCompleted, Sequence: sequence, Ref: activityRef,
+		Outcome: OutcomeSucceeded,
+	}
+	if err != nil {
+		activity.Outcome = executionErrorOutcome(err)
+		activity.Error, _ = projectTraceString(err.Error())
+		var invocationErr *InvocationError
+		if errors.As(err, &invocationErr) {
+			activity.FailureStage = invocationErr.Stage
+		}
+	}
+	b.service.publishActivity(b.outer, activity)
+	return value, err
+}
+
+func executionErrorOutcome(err error) ExecutionOutcome {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return OutcomeAborted
+	case errors.Is(err, context.DeadlineExceeded):
+		return OutcomeTimedOut
+	default:
+		return OutcomeFailed
+	}
 }
 
 func (b *executionBridge) Progress(ActivityUpdate) error {

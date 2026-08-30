@@ -13,8 +13,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/asx8678/ultra/internal/agent/notify"
 	"github.com/asx8678/ultra/internal/client"
 	"github.com/asx8678/ultra/internal/commands"
+	"github.com/asx8678/ultra/internal/fabric"
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/proto"
@@ -194,6 +196,27 @@ func TestTranslateEvent_Skills(t *testing.T) {
 	cached := skills.GetLatestStates()
 	require.Len(t, cached, 1)
 	require.Equal(t, "from-server", cached[0].Name)
+}
+
+func TestTranslateEventFabricActivity(t *testing.T) {
+	t.Parallel()
+
+	activity := &fabric.ExecutionActivity{
+		Kind: fabric.ActivityPhase, ExecutionID: "execution-1",
+		ParentToolCallID: "tool-1", SessionID: "session-1", Phase: "compile",
+	}
+	w := NewClientWorkspace(nil, proto.Workspace{})
+	out := w.translateEvent(pubsub.Event[proto.AgentEvent]{
+		Type: pubsub.UpdatedEvent,
+		Payload: proto.AgentEvent{
+			Type: proto.AgentEventTypeFabricActivity, SessionID: "session-1",
+			FabricActivity: activity,
+		},
+	})
+	got, ok := out.(pubsub.Event[notify.Notification])
+	require.True(t, ok, "expected Fabric notification, got %T", out)
+	require.Equal(t, notify.TypeFabricActivity, got.Payload.Type)
+	require.Equal(t, activity, got.Payload.FabricActivity)
 }
 
 // TestNewClientWorkspace_SeedsSkillsCache verifies that the snapshot in

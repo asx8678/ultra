@@ -1,17 +1,20 @@
-//go:build fabric_sandbox
+//go:build !fabric_disabled
 
 package agent
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/asx8678/ultra/internal/agent/notify"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/fabric"
 	"github.com/asx8678/ultra/internal/hooks"
 	"github.com/asx8678/ultra/internal/permission"
+	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,11 +22,36 @@ type fabricRuntimeViewParams struct {
 	Path string `json:"path" description:"Path to view"`
 }
 
+type recordingFabricPublisher struct {
+	mu     sync.Mutex
+	values []notify.Notification
+}
+
+func (p *recordingFabricPublisher) Publish(_ pubsub.EventType, value notify.Notification) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.values = append(p.values, value)
+}
+
+func (p *recordingFabricPublisher) PublishMustDeliver(
+	context.Context,
+	pubsub.EventType,
+	notify.Notification,
+) {
+}
+
+func (p *recordingFabricPublisher) snapshot() []notify.Notification {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]notify.Notification(nil), p.values...)
+}
+
 func TestFabricRuntimeExecutesCapturedUltraTool(t *testing.T) {
 	t.Parallel()
 	permissions := permission.NewPermissionService(t.TempDir(), false, nil)
 	permission.SetSessionMode(permissions, "session", permission.ModeReadOnly)
-	runtime, err := newFabricRuntime(permissions)
+	publisher := &recordingFabricPublisher{}
+	runtime, err := newFabricRuntime(permissions, publisher)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
@@ -54,13 +82,23 @@ func TestFabricRuntimeExecutesCapturedUltraTool(t *testing.T) {
 	require.Equal(t, "README.md", value["content"])
 	require.Len(t, result.Trace.Operations, 1)
 	require.Equal(t, "host.view", result.Trace.Operations[0].Ref)
+
+	notifications := publisher.snapshot()
+	require.Len(t, notifications, 4)
+	for _, notification := range notifications {
+		require.Equal(t, notify.TypeFabricActivity, notification.Type)
+		require.NotNil(t, notification.FabricActivity)
+		require.Equal(t, "outer", notification.FabricActivity.ParentToolCallID)
+	}
+	require.Equal(t, fabric.ActivityPhase, notifications[0].FabricActivity.Kind)
+	require.Equal(t, fabric.ActivityCallCompleted, notifications[3].FabricActivity.Kind)
 }
 
 func TestFabricRuntimeHookAllowReusesNestedToolCallIDForPermission(t *testing.T) {
 	t.Parallel()
 	permissions := permission.NewPermissionService(t.TempDir(), false, nil)
 	permission.SetSessionMode(permissions, "session", permission.ModeAsk)
-	runtime, err := newFabricRuntime(permissions)
+	runtime, err := newFabricRuntime(permissions, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
@@ -98,7 +136,7 @@ func TestFabricRuntimeRejectsWriteInReadOnlySession(t *testing.T) {
 	t.Parallel()
 	permissions := permission.NewPermissionService(t.TempDir(), false, nil)
 	permission.SetSessionMode(permissions, "session", permission.ModeReadOnly)
-	runtime, err := newFabricRuntime(permissions)
+	runtime, err := newFabricRuntime(permissions, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 

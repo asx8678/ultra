@@ -26,10 +26,10 @@ type Descriptor struct {
 }
 
 var descriptors = []Descriptor{
-	// fabric_exec itself is orchestration-only; nested calls carry their own
-	// authoritative effects through the Fabric registry. It stays disabled
-	// until a certified compiler and sandbox are configured.
-	{Name: "fabric_exec", Group: "fabric", Effects: EffectRead},
+	// fabric_exec's outer envelope has no direct host effect, so it remains
+	// available in read-only sessions. EffectRead grants no nested authority:
+	// every nested action is classified and authorized independently by Fabric.
+	{Name: "fabric_exec", Group: "fabric", Effects: EffectRead, DefaultEnabled: true},
 	{Name: "agent", Group: "agent", Effects: EffectRead | EffectWrite | EffectExec | EffectNetwork, DefaultEnabled: true},
 	{Name: "bash", Group: "core", Effects: EffectRead | EffectWrite | EffectExec | EffectNetwork, DefaultEnabled: true},
 	{Name: "ultra_info", Group: "debug", Effects: EffectRead, DefaultEnabled: true},

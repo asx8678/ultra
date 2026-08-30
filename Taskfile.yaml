@@ -55,18 +55,18 @@ tasks:
     generates:
       - ultra{{exeExt}}
 
-  build:fabric:
-    desc: Build with the experimental Fabric sandbox
+  build:without-fabric:
+    desc: Build the specialized sandbox-free binary
     vars:
       LDFLAGS: '{{if .VERSION}}-ldflags="-X github.com/asx8678/ultra/internal/version.Version={{.VERSION}}"{{end}}'
     cmds:
-      - "go build -v -tags fabric_sandbox {{.LDFLAGS}} -o ultra-fabric{{exeExt}} ."
+      - "go build -v -tags fabric_disabled {{.LDFLAGS}} -o ultra-without-fabric{{exeExt}} ."
 
-  run:fabric:
-    desc: Run with the experimental Fabric sandbox
+  run:without-fabric:
+    desc: Run the specialized sandbox-free binary
     cmds:
-      - task: build:fabric
-      - "./ultra-fabric{{exeExt}} {{.CLI_ARGS}}"
+      - task: build:without-fabric
+      - "./ultra-without-fabric{{exeExt}} {{.CLI_ARGS}}"
 
   run:
     desc: Run build
@@ -97,10 +97,10 @@ tasks:
     cmds:
       - go test -race -failfast ./... {{.CLI_ARGS}}
 
-  test:fabric:
-    desc: Run tests with the experimental Fabric sandbox
+  test:without-fabric:
+    desc: Verify the explicit sandbox-free build
     cmds:
-      - go test -tags fabric_sandbox -failfast ./... {{.CLI_ARGS}}
+      - go test -tags fabric_disabled -failfast ./... {{.CLI_ARGS}}
 
   test:record:
     desc: Run tests and record all VCR cassettes again
@@ -187,7 +187,7 @@ tasks:
   schema:
     desc: Generate JSON schema for configuration
     cmds:
-      - go run main.go schema > schema.json
+      - go run . schema > schema.json
       - echo "Generated schema.json"
     generates:
       - schema.json

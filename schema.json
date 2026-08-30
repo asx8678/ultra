@@ -111,6 +111,17 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "FabricOptions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the fabric_exec programmable tool",
+          "default": true
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "HookConfig": {
       "properties": {
         "name": {
@@ -571,6 +582,10 @@
           },
           "type": "array",
           "description": "List of skill names to disable and hide from the agent"
+        },
+        "fabric": {
+          "$ref": "#/$defs/FabricOptions",
+          "description": "Fabric programmable-tool options"
         }
       },
       "additionalProperties": false,

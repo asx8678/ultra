@@ -18,6 +18,7 @@ func TestSessionModes(t *testing.T) {
 		err     error
 	}{
 		{name: "read only grants view", mode: ModeReadOnly, tool: "view", granted: true},
+		{name: "read only grants Fabric envelope", mode: ModeReadOnly, tool: "fabric_exec", granted: true},
 		{name: "read only denies write", mode: ModeReadOnly, tool: "write"},
 		{name: "read only denies network read", mode: ModeReadOnly, tool: "fetch"},
 		{name: "read only denies shell", mode: ModeReadOnly, tool: "bash"},

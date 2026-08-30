@@ -4755,6 +4755,13 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 	case notify.TypeAgentError:
 		// Terminal edge like TypeAgentFinished; fall through to the
 		// busy/queue refresh below.
+	case notify.TypeFabricActivity:
+		if activity := n.FabricActivity; activity != nil {
+			if item, ok := m.chat.MessageItem(activity.ParentToolCallID).(*chat.FabricToolMessageItem); ok {
+				item.AddActivity(*activity)
+			}
+		}
+		return nil
 	case notify.TypeReAuthenticate:
 		return m.handleReAuthenticate(n.ProviderID)
 	case notify.TypeAWSSSOAuth:

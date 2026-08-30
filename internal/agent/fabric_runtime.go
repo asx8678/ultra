@@ -23,7 +23,7 @@ func (c *coordinator) fabricExecTool(
 ) (fantasy.AgentTool, error) {
 	created := false
 	if c.fabricRuntime == nil {
-		runtime, err := newFabricRuntime(c.permissions)
+		runtime, err := newFabricRuntime(c.permissions, c.notify)
 		if err != nil {
 			return nil, err
 		}

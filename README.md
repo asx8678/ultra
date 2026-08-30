@@ -167,24 +167,39 @@ $HOME/.local/share/ultra/ultra.json
 Both `ultrarc` and `ultra.json` are trusted code; `ultrarc` runs in a full
 shell, and any `$(...)` in `ultra.json` runs at load time. Don't launch Ultra
 in a directory whose config you haven't reviewed, and don't randomly `source`
-files from the internet into your config.
+files from the internet into your config. Fabric guest programs run in an
+isolated sandbox without ambient filesystem, process, or network access;
+nested capabilities still pass through Ultra's hooks and session permissions.
 
-### Experimental Fabric Runtime
+### Fabric Runtime
 
-Ultra can expose the experimental `fabric_exec` programmable tool in builds
-that include the restricted in-process sandbox:
+Ultra builds and enables the `fabric_exec` programmable tool by default. No
+extra build tag or configuration is required:
 
 ```bash
-task build:fabric
-# ultrarc
-option fabric true
+task build
+./ultra
 ```
 
-Fabric runs syntax-checked TypeScript against a pinned view of Ultra's native tools.
-Nested calls retain normal hooks, session permission policy, JSON Schema
-validation, cancellation, result bounds, and an execution trace. Standard
-release builds intentionally exclude the sandbox; enabling Fabric in config
-with such a binary fails closed during agent initialization.
+Fabric runs syntax-checked TypeScript against a pinned view of Ultra's native
+tools. Nested calls retain normal hooks, session permission policy, JSON Schema
+validation, cancellation, result bounds, and an execution trace. In the TUI, a
+dedicated Fabric card shows live compile/execute phases and nested-call status,
+plus the compiler/sandbox pipeline, capability view, limits, providers, trace
+projection, and terminal result. Live activity is best effort; the terminal
+trace is authoritative. The current runtime uses a local capability registry;
+Mesh, actors, and durable coordination are not active and the card labels Mesh
+accordingly.
+
+To hide Fabric from the coder agent, opt out in `ultrarc`:
+
+```bash
+option fabric false
+```
+
+For specialized sandbox-free builds, compile with `-tags fabric_disabled`.
+Fabric defaults off in those builds; explicitly enabling it fails closed during
+agent initialization.
 
 ### Environment Variables
 
