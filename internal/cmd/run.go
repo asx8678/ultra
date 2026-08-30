@@ -12,6 +12,7 @@ import (
 	"uuid"
 
 	"charm.land/log/v2"
+	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/client"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/format"
@@ -383,7 +384,10 @@ func (s *runStream) handle(ev any, stopSpinner func()) (done bool, err error) {
 			return false, nil
 		}
 		stop()
-		if e.Payload.Error != "" && !e.Payload.Cancelled {
+		if e.Payload.Cancelled {
+			return true, agent.ErrRequestCancelled
+		}
+		if e.Payload.Error != "" {
 			return true, fmt.Errorf("agent run failed: %s", e.Payload.Error)
 		}
 		// Reconcile stdout against the authoritative final

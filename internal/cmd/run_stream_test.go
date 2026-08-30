@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/stretchr/testify/require"
@@ -161,10 +162,9 @@ func TestRunStream_ErrorRunComplete(t *testing.T) {
 	require.Contains(t, err.Error(), "model temporarily unavailable")
 }
 
-// TestRunStream_CancelledRunCompleteIsClean ensures a cancelled
-// run (e.g. Ctrl+C while `ultra run` waits) exits cleanly rather
-// than reporting the cancellation as a failure.
-func TestRunStream_CancelledRunCompleteIsClean(t *testing.T) {
+// TestRunStream_CancelledRunCompleteReturnsError ensures a cancelled
+// run produces a non-zero CLI exit instead of appearing successful.
+func TestRunStream_CancelledRunCompleteReturnsError(t *testing.T) {
 	t.Parallel()
 
 	s := &runStream{sessionID: "S", out: &bytes.Buffer{}, read: map[string]int{}}
@@ -174,7 +174,7 @@ func TestRunStream_CancelledRunCompleteIsClean(t *testing.T) {
 		Cancelled: true,
 	}}, nil)
 	require.True(t, done)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, agent.ErrRequestCancelled)
 }
 
 // TestRunStream_LeadingWhitespaceTrimmedOnce mirrors the

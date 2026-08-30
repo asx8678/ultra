@@ -355,7 +355,7 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 			if result.err != nil {
 				if errors.Is(result.err, context.Canceled) || errors.Is(result.err, agent.ErrRequestCancelled) {
 					slog.Debug("Non-interactive: agent processing cancelled", "session_id", sess.ID)
-					return nil
+					return fmt.Errorf("agent processing cancelled: %w", agent.ErrRequestCancelled)
 				}
 				return fmt.Errorf("agent processing failed: %w", result.err)
 			}
