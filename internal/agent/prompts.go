@@ -19,7 +19,7 @@ var taskPromptTmpl []byte
 var initializePromptTmpl []byte
 
 const fabricCodeModeGuidance = `<fabric_code_mode>
-Use fabric_exec as the default execution path for complex coding work. Prefer it whenever a task needs two or more tool calls, parallel repository reads or searches, dependent operations, multi-file investigation or edits, or staged implementation plus verification. Compose those operations in one checked TypeScript program when practical, use Promise.all for independent calls, and set display.title to a concrete activity label.
+Use fabric_exec as the default execution path for complex coding work. Prefer it whenever a task needs two or more tool calls, parallel repository reads or searches, dependent operations, multi-file investigation or edits, or staged implementation plus verification. Compose those operations in one syntax-checked TypeScript program when practical, use Promise.all for independent calls, and set display.title to a concrete activity label. Esbuild transpiles the program without full TypeScript type checking; nested action schemas are validated authoritatively at runtime.
 
 Use a direct native tool only when the entire task is one genuinely trivial operation, such as reading one known file, making one small known edit, or running one known command. Do not wrap a single trivial call merely to use Fabric, but switch to Fabric as soon as discovery, multiple files, multiple calls, or validation is involved.
 

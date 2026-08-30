@@ -181,9 +181,11 @@ task build
 ./ultra
 ```
 
-Fabric runs syntax-checked TypeScript against a pinned view of Ultra's native
-tools. Nested calls retain normal hooks, session permission policy, JSON Schema
-validation, cancellation, result bounds, and an execution trace. In the TUI, a
+Fabric syntax-checks and transpiles TypeScript with esbuild against a pinned
+view of Ultra's native tools. Esbuild does not perform full TypeScript type
+checking; authoritative JSON Schema validation runs before every nested action.
+Nested calls retain normal hooks, session permission policy, cancellation,
+result bounds, and an execution trace. In the TUI, a
 dedicated Fabric card shows live compile/execute phases and nested-call status,
 plus the compiler/sandbox pipeline, capability view, limits, providers, trace
 projection, and terminal result. Live activity is best effort; the terminal

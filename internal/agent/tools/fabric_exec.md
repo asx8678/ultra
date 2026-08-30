@@ -1,5 +1,7 @@
-Execute a checked TypeScript program against Ultra capabilities through one
-pinned Fabric registry view.
+Execute a syntax-checked, transpiled TypeScript program against Ultra
+capabilities through one pinned Fabric registry view. Esbuild does not perform
+full TypeScript type checking; the registry authoritatively validates every
+nested action against its JSON Schema before invocation.
 
 Prefer this tool for complex coding work involving multiple calls, repository
 investigation, parallel reads/searches, multi-file changes, or staged changes

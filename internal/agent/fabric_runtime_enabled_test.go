@@ -4,12 +4,14 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent/notify"
+	"github.com/asx8678/ultra/internal/agent/tools"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/fabric"
 	"github.com/asx8678/ultra/internal/hooks"
@@ -130,6 +132,23 @@ func TestFabricRuntimeHookAllowReusesNestedToolCallIDForPermission(t *testing.T)
 	})
 	require.Equal(t, fabric.OutcomeSucceeded, result.Outcome, result.Error)
 	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestCoordinatorClosesFabricRuntimeWhenToolBecomesDisallowed(t *testing.T) {
+	coord := newGateTestCoordinator(t, true)
+	t.Cleanup(func() { require.NoError(t, coord.Close()) })
+
+	require.NoError(t, coord.UpdateModels(t.Context()))
+	require.NotNil(t, coord.fabricRuntime)
+
+	agentCfg := coord.cfg.Config().Agents[config.AgentCoder]
+	agentCfg.AllowedTools = slices.DeleteFunc(agentCfg.AllowedTools, func(name string) bool {
+		return name == tools.FabricExecToolName
+	})
+	coord.cfg.Config().Agents[config.AgentCoder] = agentCfg
+
+	require.NoError(t, coord.UpdateModels(t.Context()))
+	require.Nil(t, coord.fabricRuntime)
 }
 
 func TestFabricRuntimeRejectsWriteInReadOnlySession(t *testing.T) {

@@ -774,8 +774,9 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
 	filteredTools = wrapToolsWithPolicy(filteredTools, c.permissions)
 
-	fabricEnabled := c.cfg.Config().Options.FabricEnabled()
-	if !isSubAgent && fabricEnabled && slices.Contains(agent.AllowedTools, tools.FabricExecToolName) {
+	fabricEnabled := c.cfg.Config().Options.FabricEnabled() &&
+		slices.Contains(agent.AllowedTools, tools.FabricExecToolName)
+	if !isSubAgent && fabricEnabled {
 		fabricNativeTools := wrapToolsWithPolicy(nativeTools, c.permissions)
 		fabricTool, err := c.fabricExecTool(ctx, fabricNativeTools, hookRunner)
 		if err != nil {
