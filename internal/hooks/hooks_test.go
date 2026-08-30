@@ -659,13 +659,13 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	// exits cleanly even under -race.
 	var wg sync.WaitGroup
 	release := make(chan struct{})
+	wg.Add(1)
 	t.Cleanup(func() {
 		close(release)
 		wg.Wait()
 	})
 
 	executor := func(_ context.Context, opts shell.RunOptions) error {
-		wg.Add(1)
 		defer wg.Done()
 		// Write before the caller observes ctx.Done(); the caller will
 		// not read the buffer while we still own it.
