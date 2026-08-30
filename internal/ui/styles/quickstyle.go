@@ -685,9 +685,15 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.Tool.JobPID = muted
 	s.Tool.JobDescription = subtle
 
-	// Agent task styles
+	// Agent task and execution-forest styles.
 	s.Tool.AgentTaskTag = base.Bold(true).Padding(0, 1).MarginLeft(2).Background(o.infoMoreSubtle).Foreground(o.onPrimary)
 	s.Tool.AgentPrompt = muted
+	s.Tool.AgentSummary = base.Bold(true).Foreground(o.info)
+	s.Tool.AgentConnector = base.Foreground(o.fgMoreSubtle)
+	s.Tool.AgentNodeRunning = base.Foreground(o.busy)
+	s.Tool.AgentNodeSuccess = base.Foreground(o.success)
+	s.Tool.AgentNodeError = base.Foreground(o.error)
+	s.Tool.AgentNodeCanceled = base.Foreground(o.fgMoreSubtle)
 
 	// Agentic fetch styles
 	s.Tool.AgenticFetchPromptTag = base.Bold(true).Padding(0, 1).MarginLeft(2).Background(o.success).Foreground(o.separator)

@@ -385,9 +385,15 @@ type Styles struct {
 		JobPID         lipgloss.Style // PID text
 		JobDescription lipgloss.Style // Description text
 
-		// Agent task styles
-		AgentTaskTag lipgloss.Style // Agent task tag (blue background, bold)
-		AgentPrompt  lipgloss.Style // Agent prompt text
+		// Agent task and execution-forest styles.
+		AgentTaskTag      lipgloss.Style // Agent task tag (blue background, bold)
+		AgentPrompt       lipgloss.Style // Agent prompt text
+		AgentSummary      lipgloss.Style // Forest aggregate status.
+		AgentConnector    lipgloss.Style // Tree connector lines.
+		AgentNodeRunning  lipgloss.Style // Running node border and text.
+		AgentNodeSuccess  lipgloss.Style // Successful node border and text.
+		AgentNodeError    lipgloss.Style // Failed node border and text.
+		AgentNodeCanceled lipgloss.Style // Canceled node border and text.
 
 		// Agentic fetch styles
 		AgenticFetchPromptTag lipgloss.Style // Agentic fetch prompt tag (green background, bold)

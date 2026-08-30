@@ -27,6 +27,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/lipgloss/v2"
+	agentcore "github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/agent/hyper"
 	"github.com/asx8678/ultra/internal/agent/notify"
 	agenttools "github.com/asx8678/ultra/internal/agent/tools"
@@ -1548,6 +1549,13 @@ func (m *UI) handleConnectionEvent(msg workspace.ConnectionEvent) []tea.Cmd {
 // loadNestedToolCalls recursively loads nested tool calls for agent/agentic_fetch tools.
 func (m *UI) loadNestedToolCalls(items []chat.MessageItem) {
 	for _, item := range items {
+		if forest, ok := item.(*chat.AgentForestMessageItem); ok {
+			for _, member := range forest.AgentTools() {
+				m.loadNestedToolContainer(member, member)
+			}
+			forest.Touch()
+			continue
+		}
 		nestedContainer, ok := item.(chat.NestedToolContainer)
 		if !ok {
 			continue
@@ -1556,51 +1564,45 @@ func (m *UI) loadNestedToolCalls(items []chat.MessageItem) {
 		if !ok {
 			continue
 		}
-
-		tc := toolItem.ToolCall()
-		messageID := toolItem.MessageID()
-
-		// Get the agent tool session ID.
-		agentSessionID := m.com.Workspace.CreateAgentToolSessionID(messageID, tc.ID)
-
-		// Fetch nested messages.
-		nestedMsgs, err := m.com.Workspace.ListMessages(context.Background(), agentSessionID)
-		if err != nil || len(nestedMsgs) == 0 {
-			continue
-		}
-
-		// Build tool result map for nested messages.
-		nestedMsgPtrs := make([]*message.Message, len(nestedMsgs))
-		for i := range nestedMsgs {
-			nestedMsgPtrs[i] = &nestedMsgs[i]
-		}
-		nestedToolResultMap := chat.BuildToolResultMap(nestedMsgPtrs)
-
-		// Extract nested tool items.
-		var nestedTools []chat.ToolMessageItem
-		for _, nestedMsg := range nestedMsgPtrs {
-			nestedItems := chat.ExtractMessageItems(m.com.Styles, nestedMsg, nestedToolResultMap, m.com.Workspace.WorkingDir())
-			for _, nestedItem := range nestedItems {
-				if nestedToolItem, ok := nestedItem.(chat.ToolMessageItem); ok {
-					// Mark nested tools as simple (compact) rendering.
-					if simplifiable, ok := nestedToolItem.(chat.Compactable); ok {
-						simplifiable.SetCompact(true)
-					}
-					nestedTools = append(nestedTools, nestedToolItem)
-				}
-			}
-		}
-
-		// Recursively load nested tool calls for any agent tools within.
-		nestedMessageItems := make([]chat.MessageItem, len(nestedTools))
-		for i, nt := range nestedTools {
-			nestedMessageItems[i] = nt
-		}
-		m.loadNestedToolCalls(nestedMessageItems)
-
-		// Set nested tools on the parent.
-		nestedContainer.SetNestedTools(nestedTools)
+		m.loadNestedToolContainer(nestedContainer, toolItem)
 	}
+}
+
+func (m *UI) loadNestedToolContainer(nestedContainer chat.NestedToolContainer, toolItem chat.ToolMessageItem) {
+	tc := toolItem.ToolCall()
+	agentSessionID := m.com.Workspace.CreateAgentToolSessionID(toolItem.MessageID(), tc.ID)
+	nestedMsgs, err := m.com.Workspace.ListMessages(context.Background(), agentSessionID)
+	if err != nil || len(nestedMsgs) == 0 {
+		return
+	}
+
+	nestedMsgPtrs := make([]*message.Message, len(nestedMsgs))
+	for i := range nestedMsgs {
+		nestedMsgPtrs[i] = &nestedMsgs[i]
+	}
+	nestedToolResultMap := chat.BuildToolResultMap(nestedMsgPtrs)
+
+	var nestedTools []chat.ToolMessageItem
+	for _, nestedMsg := range nestedMsgPtrs {
+		nestedItems := chat.ExtractMessageItems(m.com.Styles, nestedMsg, nestedToolResultMap, m.com.Workspace.WorkingDir())
+		for _, nestedItem := range nestedItems {
+			nestedToolItem, ok := nestedItem.(chat.ToolMessageItem)
+			if !ok {
+				continue
+			}
+			if simplifiable, ok := nestedToolItem.(chat.Compactable); ok {
+				simplifiable.SetCompact(true)
+			}
+			nestedTools = append(nestedTools, nestedToolItem)
+		}
+	}
+
+	nestedMessageItems := make([]chat.MessageItem, len(nestedTools))
+	for i, nested := range nestedTools {
+		nestedMessageItems[i] = nested
+	}
+	m.loadNestedToolCalls(nestedMessageItems)
+	nestedContainer.SetNestedTools(nestedTools)
 }
 
 // appendSessionMessage appends a new message to the current session in the chat
@@ -1667,17 +1669,19 @@ func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 		}
 	case message.Tool:
 		for _, tr := range msg.ToolResults() {
-			toolItem := m.chat.MessageItem(tr.ToolCallID)
-			if toolItem == nil {
-				// we should have an item!
+			owner := m.chat.MessageItem(tr.ToolCallID)
+			if owner == nil {
 				continue
 			}
-			if toolMsgItem, ok := toolItem.(chat.ToolMessageItem); ok {
-				toolMsgItem.SetResult(&tr)
-				if m.chat.Follow() {
-					if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
-						cmds = append(cmds, cmd)
-					}
+			toolMsgItem := chat.ResolveToolMessageItem(owner, tr.ToolCallID)
+			if toolMsgItem == nil {
+				continue
+			}
+			toolMsgItem.SetResult(&tr)
+			chat.TouchGroup(owner)
+			if m.chat.Follow() {
+				if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
+					cmds = append(cmds, cmd)
 				}
 			}
 		}
@@ -1755,19 +1759,67 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 	}
 
 	var items []chat.MessageItem
-	for _, tc := range msg.ToolCalls() {
-		existingToolItem := m.chat.MessageItem(tc.ID)
-		if toolItem, ok := existingToolItem.(chat.ToolMessageItem); ok {
-			existingToolCall := toolItem.ToolCall()
-			// only update if finished state changed or input changed
-			// to avoid clearing the cache
-			if (tc.Finished && !existingToolCall.Finished) || tc.Input != existingToolCall.Input {
+	toolCalls := msg.ToolCalls()
+	canceled := msg.FinishReason() == message.FinishReasonCanceled
+	for i := 0; i < len(toolCalls); {
+		if toolCalls[i].Name == agentcore.AgentToolName {
+			end := i + 1
+			for end < len(toolCalls) && toolCalls[end].Name == agentcore.AgentToolName {
+				end++
+			}
+			forestID := chat.AgentForestID(msg.ID, toolCalls[i].ID)
+			owner := m.chat.MessageItem(forestID)
+			forest, _ := owner.(*chat.AgentForestMessageItem)
+			if forest == nil {
+				agents := make([]*chat.AgentToolMessageItem, 0, end-i)
+				for _, tc := range toolCalls[i:end] {
+					member := chat.NewAgentToolMessageItem(m.com.Styles, tc, nil, canceled)
+					member.SetMessageID(msg.ID)
+					agents = append(agents, member)
+				}
+				forest = chat.NewAgentForestMessageItem(m.com.Styles, msg.ID, agents)
+				items = append(items, forest)
+			} else {
+				changed := false
+				for _, tc := range toolCalls[i:end] {
+					member := forest.ToolItem(tc.ID)
+					if member == nil {
+						newMember := chat.NewAgentToolMessageItem(m.com.Styles, tc, nil, canceled)
+						newMember.SetMessageID(msg.ID)
+						forest.AddAgent(newMember)
+						changed = true
+						continue
+					}
+					existing := member.ToolCall()
+					if (tc.Finished && !existing.Finished) || tc.Input != existing.Input {
+						member.SetToolCall(tc)
+						changed = true
+					}
+					if canceled && member.Status() != chat.ToolStatusCanceled {
+						member.SetStatus(chat.ToolStatusCanceled)
+						changed = true
+					}
+				}
+				if changed {
+					forest.Touch()
+					m.chat.UpdateNestedToolIDs(forest.ID())
+				}
+			}
+			i = end
+			continue
+		}
+
+		tc := toolCalls[i]
+		existingOwner := m.chat.MessageItem(tc.ID)
+		if toolItem := chat.ResolveToolMessageItem(existingOwner, tc.ID); toolItem != nil {
+			existing := toolItem.ToolCall()
+			if (tc.Finished && !existing.Finished) || tc.Input != existing.Input {
 				toolItem.SetToolCall(tc)
 			}
+		} else if existingOwner == nil {
+			items = append(items, chat.NewToolMessageItem(m.com.Styles, msg.ID, tc, nil, canceled, m.com.Workspace.WorkingDir()))
 		}
-		if existingToolItem == nil {
-			items = append(items, chat.NewToolMessageItem(m.com.Styles, msg.ID, tc, nil, false, m.com.Workspace.WorkingDir()))
-		}
+		i++
 	}
 
 	for _, item := range items {
@@ -1804,25 +1856,13 @@ func (m *UI) handleChildSessionMessage(event pubsub.Event[message.Message]) tea.
 		return nil
 	}
 
-	// Find the parent agent tool item.
-	var agentItem chat.NestedToolContainer
-	for i := 0; i < m.chat.Len(); i++ {
-		item := m.chat.MessageItem(toolCallID)
-		if item == nil {
-			continue
-		}
-		if agent, ok := item.(chat.NestedToolContainer); ok {
-			if toolMessageItem, ok := item.(chat.ToolMessageItem); ok {
-				if toolMessageItem.ToolCall().ID == toolCallID {
-					// Verify this agent belongs to the correct parent message.
-					// We can't directly check parentMessageID on the item, so we trust the session parsing.
-					agentItem = agent
-					break
-				}
-			}
-		}
+	// Find the delegated agent inside either a standalone item or a grouped
+	// execution forest. Session parsing provides the authoritative parent ID.
+	owner := m.chat.MessageItem(toolCallID)
+	if owner == nil {
+		return nil
 	}
-
+	agentItem := chat.ResolveNestedToolContainer(owner, toolCallID)
 	if agentItem == nil {
 		return nil
 	}
@@ -1865,10 +1905,10 @@ func (m *UI) handleChildSessionMessage(event pubsub.Event[message.Message]) tea.
 		}
 	}
 
-	// Update the agent item with the new nested tools.
+	// Update the agent and its grouped owner, then refresh aliases so nested
+	// animation events route to the containing list entry.
 	agentItem.SetNestedTools(nestedTools)
-
-	// Update the chat so it updates the index map for animations to work as expected
+	chat.TouchGroup(owner)
 	m.chat.UpdateNestedToolIDs(toolCallID)
 
 	if m.chat.Follow() {

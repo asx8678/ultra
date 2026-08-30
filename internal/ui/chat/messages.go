@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/lipgloss/v2"
+	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/ui/anim"
@@ -391,7 +392,29 @@ func ExtractMessageItems(sty *styles.Styles, msg *message.Message, toolResults m
 		if ShouldRenderAssistantMessage(msg) {
 			items = append(items, NewAssistantMessageItem(sty, msg))
 		}
-		for _, tc := range msg.ToolCalls() {
+		toolCalls := msg.ToolCalls()
+		for i := 0; i < len(toolCalls); {
+			if toolCalls[i].Name == agent.AgentToolName {
+				end := i + 1
+				for end < len(toolCalls) && toolCalls[end].Name == agent.AgentToolName {
+					end++
+				}
+				agents := make([]*AgentToolMessageItem, 0, end-i)
+				for _, tc := range toolCalls[i:end] {
+					var result *message.ToolResult
+					if tr, ok := toolResults[tc.ID]; ok {
+						result = &tr
+					}
+					item := NewAgentToolMessageItem(sty, tc, result, msg.FinishReason() == message.FinishReasonCanceled)
+					item.SetMessageID(msg.ID)
+					agents = append(agents, item)
+				}
+				items = append(items, NewAgentForestMessageItem(sty, msg.ID, agents))
+				i = end
+				continue
+			}
+
+			tc := toolCalls[i]
 			var result *message.ToolResult
 			if tr, ok := toolResults[tc.ID]; ok {
 				result = &tr
@@ -404,6 +427,7 @@ func ExtractMessageItems(sty *styles.Styles, msg *message.Message, toolResults m
 				msg.FinishReason() == message.FinishReasonCanceled,
 				workingDir,
 			))
+			i++
 		}
 		return items
 	}

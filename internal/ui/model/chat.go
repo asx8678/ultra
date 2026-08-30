@@ -408,13 +408,7 @@ func (m *Chat) SetMessages(msgs ...chat.MessageItem) tea.Cmd {
 
 	items := make([]list.Item, len(msgs))
 	for i, msg := range msgs {
-		m.idInxMap[msg.ID()] = i
-		// Register nested tool IDs for tools that contain nested tools.
-		if container, ok := msg.(chat.NestedToolContainer); ok {
-			for _, nested := range container.NestedTools() {
-				m.idInxMap[nested.ID()] = i
-			}
-		}
+		m.registerItemIDs(msg, i)
 		items[i] = msg
 	}
 	m.list.SetItems(items...)
@@ -427,13 +421,7 @@ func (m *Chat) AppendMessages(msgs ...chat.MessageItem) {
 	items := make([]list.Item, len(msgs))
 	indexOffset := m.list.Len()
 	for i, msg := range msgs {
-		m.idInxMap[msg.ID()] = indexOffset + i
-		// Register nested tool IDs for tools that contain nested tools.
-		if container, ok := msg.(chat.NestedToolContainer); ok {
-			for _, nested := range container.NestedTools() {
-				m.idInxMap[nested.ID()] = indexOffset + i
-			}
-		}
+		m.registerItemIDs(msg, indexOffset+i)
 		items[i] = msg
 	}
 	m.list.AppendItems(items...)
@@ -452,14 +440,29 @@ func (m *Chat) UpdateNestedToolIDs(containerID string) {
 		return
 	}
 
-	container, ok := item.(chat.NestedToolContainer)
-	if !ok {
-		return
-	}
+	m.registerItemIDs(item, idx)
+}
 
-	// Register all nested tool IDs to point to the container's index.
-	for _, nested := range container.NestedTools() {
-		m.idInxMap[nested.ID()] = idx
+func (m *Chat) registerItemIDs(item chat.MessageItem, idx int) {
+	m.idInxMap[item.ID()] = idx
+	if aliases, ok := item.(chat.MessageItemAliases); ok {
+		for _, id := range aliases.AliasIDs() {
+			m.idInxMap[id] = idx
+		}
+	}
+	if container, ok := item.(chat.NestedToolContainer); ok {
+		for _, nested := range container.NestedTools() {
+			m.idInxMap[nested.ID()] = idx
+		}
+	}
+}
+
+func (m *Chat) rebuildIDIndex() {
+	m.idInxMap = make(map[string]int)
+	for i := range m.list.Len() {
+		if item, ok := m.list.ItemAt(i).(chat.MessageItem); ok {
+			m.registerItemIDs(item, i)
+		}
 	}
 }
 
@@ -787,17 +790,12 @@ func (m *Chat) RemoveMessage(id string) {
 	// Remove from list
 	m.list.RemoveItem(idx)
 
-	// Remove from index map
-	delete(m.idInxMap, id)
+	// Rebuild every primary and alias mapping. This also removes aliases owned
+	// by the deleted grouped item instead of leaving stale indices behind.
+	m.rebuildIDIndex()
 
-	// Rebuild index map for all items after the removed one
-	for i := idx; i < m.list.Len(); i++ {
-		if item, ok := m.list.ItemAt(i).(chat.MessageItem); ok {
-			m.idInxMap[item.ID()] = i
-		}
-	}
-
-	// Clean up any paused animations for this message
+	// Clean up any paused animation for the requested ID. Other stale aliases
+	// are pruned lazily by RestartPausedVisibleAnimations.
 	delete(m.pausedAnimations, id)
 }
 

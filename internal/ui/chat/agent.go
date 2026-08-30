@@ -11,6 +11,7 @@ import (
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/ui/anim"
 	"github.com/asx8678/ultra/internal/ui/styles"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // -----------------------------------------------------------------------------
@@ -126,10 +127,6 @@ type AgentToolRenderContext struct {
 // RenderTool implements the [ToolRenderer] interface.
 func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
 	cappedWidth := cappedMessageWidth(width)
-	if !opts.ToolCall.Finished && !opts.IsCanceled() && len(r.agent.nestedTools) == 0 {
-		return pendingTool(sty, "Agent", opts.Anim, opts.Compact)
-	}
-
 	var params agent.AgentParams
 	_ = json.Unmarshal([]byte(opts.ToolCall.Input), &params)
 
@@ -143,26 +140,9 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 		return header
 	}
 
-	// Build the task tag and prompt.
-	taskTag := sty.Tool.AgentTaskTag.Render("Task")
-	taskTagWidth := lipgloss.Width(taskTag)
-
-	// Calculate remaining width for prompt.
-	remainingWidth := min(cappedWidth-taskTagWidth-3, maxTextWidth-taskTagWidth-3) // -3 for spacing
-
-	promptText := sty.Tool.AgentPrompt.Width(remainingWidth).Render(prompt)
-
-	header = lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		"",
-		lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			taskTag,
-			" ",
-			promptText,
-		),
-	)
+	cardWidth := min(52, max(12, cappedWidth-2))
+	header = renderAgentCard(sty, opts.Status, "Agent", prompt, cardWidth)
+	remainingWidth := max(1, cappedWidth-4)
 
 	// Build tree with nested tool calls.
 	childTools := tree.Root(header)
@@ -174,7 +154,7 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 
 	// Build parts.
 	var parts []string
-	parts = append(parts, childTools.Enumerator(roundedEnumerator(2, taskTagWidth-5)).String())
+	parts = append(parts, childTools.Enumerator(roundedEnumerator(2, 0)).String())
 
 	// Show animation if still running.
 	if !opts.HasResult() && !opts.IsCanceled() {
@@ -190,6 +170,46 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	}
 
 	return result
+}
+
+func renderAgentCard(sty *styles.Styles, status ToolStatus, name, prompt string, width int) string {
+	width = max(8, width)
+	innerWidth := max(1, width-4)
+	label := agentStatusLabel(status)
+	title := ansi.Truncate(name+" · "+label, innerWidth, "…")
+	prompt = ansi.Truncate(strings.Join(strings.Fields(prompt), " "), innerWidth, "…")
+	border := strings.Repeat("─", width-2)
+	line := func(value string) string {
+		return "│ " + value + strings.Repeat(" ", max(0, innerWidth-ansi.StringWidth(value))) + " │"
+	}
+	cardStyle := sty.Tool.AgentNodeRunning
+	switch status {
+	case ToolStatusSuccess:
+		cardStyle = sty.Tool.AgentNodeSuccess
+	case ToolStatusError:
+		cardStyle = sty.Tool.AgentNodeError
+	case ToolStatusCanceled:
+		cardStyle = sty.Tool.AgentNodeCanceled
+	}
+	return cardStyle.Render(strings.Join([]string{
+		"╭" + border + "╮",
+		line(title),
+		line(prompt),
+		"╰" + border + "╯",
+	}, "\n"))
+}
+
+func agentStatusLabel(status ToolStatus) string {
+	switch status {
+	case ToolStatusSuccess:
+		return "■ DONE"
+	case ToolStatusError:
+		return "! FAILED"
+	case ToolStatusCanceled:
+		return "× CANCELED"
+	default:
+		return "▣ RUNNING"
+	}
 }
 
 // -----------------------------------------------------------------------------
