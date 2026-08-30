@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/backend"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // installSyntheticWorkspace creates a synthetic [backend.Workspace]

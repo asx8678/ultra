@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent"
@@ -18,7 +19,6 @@ import (
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // runCoordinator is a configurable agent.Coordinator stub for the

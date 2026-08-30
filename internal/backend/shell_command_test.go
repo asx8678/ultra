@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"testing"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/app"
 	"github.com/asx8678/ultra/internal/db"
@@ -10,7 +11,6 @@ import (
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/session"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 func TestRunShellCommand_SkipsPersistenceForMissingSession(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent"
@@ -12,7 +13,6 @@ import (
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // errorCoordinator is a minimal agent.Coordinator whose RunAccepted

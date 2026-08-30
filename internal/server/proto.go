@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/backend"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/session"
-	"uuid"
 )
 
 type controllerV1 struct {

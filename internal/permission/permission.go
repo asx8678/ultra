@@ -7,10 +7,10 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/csync"
 	"github.com/asx8678/ultra/internal/pubsub"
-	"uuid"
 )
 
 // hookApprovalKey is the unexported context key used to mark a tool call as

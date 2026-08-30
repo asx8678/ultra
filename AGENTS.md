@@ -1,9 +1,9 @@
-# Crush Development Guide
+# Ultra Development Guide
 
 ## Project Overview
 
-Crush is a terminal-based AI coding assistant built in Go by
-[Charm](https://charm.land). It connects to LLMs and gives them tools to read,
+Ultra is a terminal-based AI coding assistant built in Go using
+[Charm](https://charm.land) libraries. It connects to LLMs and gives them tools to read,
 write, and execute code. It supports multiple providers (Anthropic, OpenAI,
 Gemini, Bedrock, Copilot, Hyper, MiniMax, Vercel, and more), integrates with
 LSPs for code intelligence, and supports extensibility via MCP servers and
@@ -69,10 +69,10 @@ internal/
   `.md` description file in `internal/agent/tools/`.
 - **System prompts are Go templates**: `internal/agent/templates/*.md.tpl`
   with runtime data injected.
-- **Context files**: Crush reads AGENTS.md, CRUSH.md, CLAUDE.md, GEMINI.md
+- **Context files**: Ultra reads AGENTS.md, CRUSH.md, CLAUDE.md, GEMINI.md
   (and `.local` variants) from the working directory for project-specific
   instructions.
-- **Bash config format**: Crush's primary config format is `crushrc` — a
+- **Bash config format**: Ultra's primary config format is `crushrc` — a
   Bash script using builtins (`provider`, `model`, `mcp`, `lsp`,
   `permissions`, `hook`, `options`) to define config. `crush.json` is still
   supported but is deprecated in favor of `crushrc` and may be removed in a

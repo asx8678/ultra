@@ -2,12 +2,12 @@ package shell
 
 import (
 	"testing"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/db"
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/session"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 func TestPersistOutput_SkipsMissingSession(t *testing.T) {

@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/db"
 	"github.com/asx8678/ultra/internal/pubsub"
-	"uuid"
 )
 
 const (

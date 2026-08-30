@@ -12,9 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/pubsub"
-	"uuid"
 )
 
 // ErrCancelled is returned by Ask when the user cancels the question.

@@ -138,7 +138,7 @@ ultra --continue
 
 		if _, err := program.Run(); err != nil {
 			slog.Error("TUI run error", "error", err)
-			return errors.New("Ultra crashed. Please copy the stacktrace above and report it at https://github.com/asx8678/ultra/issues")
+			return errors.New("ultra crashed; copy the stacktrace above and report it at https://github.com/asx8678/ultra/issues")
 		}
 		var banner config.ExitBanner
 		if cfg := com.Config(); cfg != nil {

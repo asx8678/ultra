@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/app"
 	"github.com/asx8678/ultra/internal/config"
@@ -23,7 +24,6 @@ import (
 	"github.com/asx8678/ultra/internal/skills"
 	"github.com/asx8678/ultra/internal/ui/util"
 	"github.com/asx8678/ultra/internal/version"
-	"uuid"
 )
 
 // Common errors returned by backend operations.

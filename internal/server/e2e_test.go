@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/app"
 	"github.com/asx8678/ultra/internal/backend"
@@ -22,7 +23,6 @@ import (
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // e2eHarness wires a Server, its Backend (with a custom shutdownFn we

@@ -12,11 +12,11 @@ import (
 	stdpath "path"
 	"path/filepath"
 	"time"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/server"
-	"uuid"
 )
 
 // DummyHost is used to satisfy the http.Client's requirement for a URL.

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"uuid"
 
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent"
@@ -16,7 +17,6 @@ import (
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/session"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // stubCoordinator is a minimal agent.Coordinator that only reports

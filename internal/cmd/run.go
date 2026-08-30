@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"time"
+	"uuid"
 
 	"charm.land/log/v2"
 	"github.com/asx8678/ultra/internal/client"
@@ -23,7 +24,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
-	"uuid"
 )
 
 var runCmd = &cobra.Command{

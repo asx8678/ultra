@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent"
@@ -20,7 +21,6 @@ import (
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // scriptedCoordinator is an agent.Coordinator stub that mimics the

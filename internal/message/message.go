@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/db"
 	"github.com/asx8678/ultra/internal/pubsub"
-	"uuid"
 )
 
 // defaultUpdateDebounce is the default debounce window for [Service.Update].

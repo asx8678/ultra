@@ -19,11 +19,13 @@ import (
 // cmd.WaitDelay = time.Second behavior of the previous os/exec path.
 const abandonGrace = time.Second
 
-// runShell is the shell executor used by runOne. It is a package-level
-// variable so tests can substitute a blocking or non-yielding
-// implementation to exercise the abandon-on-timeout path without
-// depending on the scheduling behavior of the real interpreter.
-var runShell = shell.Run
+type hookExecutor func(context.Context, shell.RunOptions) error
+
+type hookExecResult struct {
+	stdout string
+	stderr string
+	err    error
+}
 
 // compiledHook pairs a HookConfig with its compiled matcher regex. A nil
 // matcher means "match every tool".
@@ -37,6 +39,7 @@ type Runner struct {
 	hooks      []compiledHook
 	cwd        string
 	projectDir string
+	executor   hookExecutor
 }
 
 // NewRunner creates a Runner from the given hook configs. Each hook's
@@ -48,6 +51,10 @@ type Runner struct {
 // than treated as match-everything. ValidateHooks is expected to have
 // caught syntax errors earlier, so this is defense in depth.
 func NewRunner(hooks []config.HookConfig, cwd, projectDir string) *Runner {
+	return newRunner(hooks, cwd, projectDir, shell.Run)
+}
+
+func newRunner(hooks []config.HookConfig, cwd, projectDir string, executor hookExecutor) *Runner {
 	compiled := make([]compiledHook, 0, len(hooks))
 	for _, h := range hooks {
 		ch := compiledHook{cfg: h}
@@ -70,6 +77,7 @@ func NewRunner(hooks []config.HookConfig, cwd, projectDir string) *Runner {
 		hooks:      compiled,
 		cwd:        cwd,
 		projectDir: projectDir,
+		executor:   executor,
 	}
 }
 
@@ -162,22 +170,17 @@ func (r *Runner) matchingHooks(toolName string) []config.HookConfig {
 //
 // A hook that fails to yield after its deadline has passed is abandoned
 // after abandonGrace so the caller never blocks longer than
-// timeout + abandonGrace. Ownership of the stdout and stderr buffers is
-// strictly single-goroutine:
-//   - before receiving from `done`, only the goroutine writes to them;
-//   - after `done` delivers a value, the goroutine is finished and the
-//     outer frame reads them;
-//   - on the abandon path, the goroutine may still be writing and the
-//     outer frame must not touch them again.
+// timeout + abandonGrace. The worker owns its stdout and stderr buffers
+// completely and transfers immutable strings only after execution finishes.
 func (r *Runner) runOne(parentCtx context.Context, hook config.HookConfig, envVars []string, payload []byte) HookResult {
 	timeout := hook.TimeoutDuration()
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	var stdout, stderr bytes.Buffer
-	done := make(chan error, 1)
+	done := make(chan hookExecResult, 1)
 	go func() {
-		done <- runShell(ctx, shell.RunOptions{
+		var stdout, stderr bytes.Buffer
+		err := r.executor(ctx, shell.RunOptions{
 			Command: hook.Command,
 			Cwd:     r.cwd,
 			Env:     envVars,
@@ -185,16 +188,19 @@ func (r *Runner) runOne(parentCtx context.Context, hook config.HookConfig, envVa
 			Stdout:  &stdout,
 			Stderr:  &stderr,
 		})
+		done <- hookExecResult{
+			stdout: stdout.String(),
+			stderr: stderr.String(),
+			err:    err,
+		}
 	}()
 
-	var err error
+	var execResult hookExecResult
 	select {
-	case err = <-done:
-		// Normal path: goroutine has finished, buffers are safe to read.
+	case execResult = <-done:
 	case <-ctx.Done():
 		select {
-		case err = <-done:
-			// Interpreter yielded within the grace period; safe to read.
+		case execResult = <-done:
 		case <-time.After(abandonGrace):
 			slog.Warn(
 				"Hook did not yield after cancel; abandoning goroutine",
@@ -207,7 +213,7 @@ func (r *Runner) runOne(parentCtx context.Context, hook config.HookConfig, envVa
 		}
 	}
 
-	if shell.IsInterrupt(err) {
+	if shell.IsInterrupt(execResult.err) {
 		// Distinguish timeout from parent cancellation.
 		if parentCtx.Err() != nil {
 			slog.Debug("Hook cancelled by parent context", "command", hook.Command)
@@ -217,12 +223,12 @@ func (r *Runner) runOne(parentCtx context.Context, hook config.HookConfig, envVa
 		return HookResult{Decision: DecisionNone}
 	}
 
-	if err != nil {
-		exitCode := shell.ExitCode(err)
+	if execResult.err != nil {
+		exitCode := shell.ExitCode(execResult.err)
 		switch exitCode {
 		case 2:
 			// Exit code 2 = block this tool call. Stderr is the reason.
-			reason := strings.TrimSpace(stderr.String())
+			reason := strings.TrimSpace(execResult.stderr)
 			if reason == "" {
 				reason = "blocked by hook"
 			}
@@ -232,7 +238,7 @@ func (r *Runner) runOne(parentCtx context.Context, hook config.HookConfig, envVa
 			}
 		case HaltExitCode:
 			// Exit code 49 = halt the whole turn. Stderr is the reason.
-			reason := strings.TrimSpace(stderr.String())
+			reason := strings.TrimSpace(execResult.stderr)
 			if reason == "" {
 				reason = "turn halted by hook"
 			}
@@ -247,15 +253,15 @@ func (r *Runner) runOne(parentCtx context.Context, hook config.HookConfig, envVa
 				"Hook failed with non-blocking error",
 				"command", hook.Command,
 				"exit_code", exitCode,
-				"stderr", strings.TrimSpace(stderr.String()),
-				"error", err,
+				"stderr", strings.TrimSpace(execResult.stderr),
+				"error", execResult.err,
 			)
 			return HookResult{Decision: DecisionNone}
 		}
 	}
 
 	// Exit code 0 — parse stdout JSON.
-	result := parseStdout(stdout.String())
+	result := parseStdout(execResult.stdout)
 	slog.Debug(
 		"Hook executed",
 		"command", hook.Command,

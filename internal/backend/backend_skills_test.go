@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"uuid"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/asx8678/ultra/internal/backend"
@@ -15,7 +16,6 @@ import (
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/asx8678/ultra/internal/skills"
 	"github.com/stretchr/testify/require"
-	"uuid"
 )
 
 // TestBackend_WorkspaceSkillsIsolation verifies that skill discovery

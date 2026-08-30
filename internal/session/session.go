@@ -8,11 +8,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"uuid"
 
 	"github.com/asx8678/ultra/internal/db"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/zeebo/xxh3"
-	"uuid"
 )
 
 type TodoStatus string

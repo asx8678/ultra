@@ -655,9 +655,6 @@ func TestAggregationUpdatedInput(t *testing.T) {
 // Under -race this catches any code path in runOne that reads those
 // buffers after returning the DecisionNone abandon result.
 func TestRunnerAbandonRaceSafety(t *testing.T) {
-	origRunShell := runShell
-	t.Cleanup(func() { runShell = origRunShell })
-
 	// Synchronize shutdown with the abandoned goroutine so the test
 	// exits cleanly even under -race.
 	var wg sync.WaitGroup
@@ -667,7 +664,7 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 		wg.Wait()
 	})
 
-	runShell = func(_ context.Context, opts shell.RunOptions) error {
+	executor := func(_ context.Context, opts shell.RunOptions) error {
 		wg.Add(1)
 		defer wg.Done()
 		// Write before the caller observes ctx.Done(); the caller will
@@ -685,10 +682,10 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	}
 
 	hookCfg := config.HookConfig{
-		Command: "# irrelevant; runShell is stubbed",
+		Command: "# irrelevant; executor is stubbed",
 		Timeout: 1,
 	}
-	r := NewRunner([]config.HookConfig{hookCfg}, t.TempDir(), t.TempDir())
+	r := newRunner([]config.HookConfig{hookCfg}, t.TempDir(), t.TempDir(), executor)
 
 	start := time.Now()
 	result, err := r.Run(context.Background(), EventPreToolUse, "sess", "bash", `{}`)
