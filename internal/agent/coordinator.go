@@ -1,13 +1,11 @@
 package agent
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -27,6 +25,7 @@ import (
 	"github.com/asx8678/ultra/internal/filetracker"
 	"github.com/asx8678/ultra/internal/history"
 	"github.com/asx8678/ultra/internal/hooks"
+	"github.com/asx8678/ultra/internal/jsonmerge"
 	"github.com/asx8678/ultra/internal/lsp"
 	"github.com/asx8678/ultra/internal/message"
 	"github.com/asx8678/ultra/internal/oauth"
@@ -45,7 +44,6 @@ import (
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/providers/openrouter"
 	"charm.land/fantasy/providers/vercel"
-	"github.com/qjebbs/go-jsons"
 )
 
 // Coordinator errors.
@@ -263,13 +261,10 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		latest = rc
 		hasLatest = true
 	}
-	// Propagate the caller-supplied RunID (set via agent.WithRunID
-	// at the HTTP boundary in backend.SendMessage) onto the
-	// SessionAgentCall so the terminal RunComplete event echoes it
-	// back. Both attempts in the retry chain reuse the same RunID;
-	// the coalesce closure publishes the final outcome under that
-	// same correlator.
-	runID := RunIDFromContext(ctx)
+	// Normalize RunID at the coordinator boundary so both retry attempts and
+	// the coalesced terminal event share one mandatory turn identity. The
+	// session agent applies the same normalization for direct callers.
+	runID := EnsureRunID(RunIDFromContext(ctx))
 	run := func() (*fantasy.AgentResult, error) {
 		return c.currentAgent.Run(ctx, SessionAgentCall{
 			SessionID:        sessionID,
@@ -362,13 +357,7 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) fantasy.
 		}
 	}
 
-	readers := []io.Reader{
-		bytes.NewReader(catwalkOpts),
-		bytes.NewReader(providerCfgOpts),
-		bytes.NewReader(cfgOpts),
-	}
-
-	got, err := jsons.Merge(readers)
+	got, err := jsonmerge.Merge(catwalkOpts, providerCfgOpts, cfgOpts)
 	if err != nil {
 		slog.Error("Could not merge call config", "err", err)
 		return options

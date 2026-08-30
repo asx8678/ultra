@@ -18,6 +18,32 @@ import (
 // drains; carrying it forward would silently funnel the terminal
 // event into a closure nobody reads, and subscribers (`ultra run`)
 // would hang waiting for a RunComplete that never publishes.
+func TestSessionAgentRun_AssignsRunIDBeforeQueueing(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	a := NewSessionAgent(SessionAgentOptions{
+		Sessions: env.sessions,
+		Messages: env.messages,
+	}).(*sessionAgent)
+
+	const sessionID = "queued-run-id"
+	a.activeRequests.Set(sessionID, &activeCancel{cancel: func() {}})
+
+	res, err := a.Run(t.Context(), SessionAgentCall{
+		SessionID: sessionID,
+		Prompt:    "queued prompt",
+	})
+	require.NoError(t, err)
+	require.Nil(t, res)
+
+	queued, ok := a.messageQueue.Get(sessionID)
+	require.True(t, ok)
+	require.Len(t, queued, 1)
+	require.NotEmpty(t, queued[0].RunID,
+		"the queue must never carry an uncorrelated submitted turn")
+}
+
 func TestSessionAgentRun_QueueStripsOnComplete(t *testing.T) {
 	t.Parallel()
 
@@ -60,12 +86,9 @@ func TestSessionAgentRun_QueueStripsOnComplete(t *testing.T) {
 
 // TestDrainQueueForStep_FiltersUnderDispatchLock verifies that the queue
 // drain evaluates the per-session cancel mark while holding the dispatch
-// mutex (canceledBySeq's documented precondition). Queued calls at or
-// below the cancel high-water mark are dropped, calls queued after the
-// cancel (higher seq) are folded, untracked enqueues (seq == 0) are
-// dropped whenever any mark is present, and the queue is cleared. These
-// calls carry no RunID, so all foldable survivors are returned for
-// folding (the existing follow-up behavior).
+// mutex (canceledBySeq's documented precondition). Queued calls at or below
+// the cancel high-water mark are dropped, while calls queued after the cancel
+// remain queued as distinct turns.
 func TestDrainQueueForStep_FiltersUnderDispatchLock(t *testing.T) {
 	t.Parallel()
 
@@ -85,21 +108,20 @@ func TestDrainQueueForStep_FiltersUnderDispatchLock(t *testing.T) {
 	// Cancel high-water mark at seq 2: seq <= 2 and seq == 0 are covered.
 	a.cancelMark.Set(sessionID, 2)
 
-	fold, canceledWithRunID := a.drainQueueForStep(sessionID)
+	canceledWithRunID := a.drainQueueForStep(sessionID)
 
-	require.Len(t, fold, 1,
-		"only the follow-up queued after the cancel (seq > mark) must be folded")
-	require.Equal(t, "after", fold[0].Prompt)
 	require.Empty(t, canceledWithRunID,
 		"no dropped call carried a RunID, so none need a terminal RunComplete")
 
-	_, ok := a.messageQueue.Get(sessionID)
-	require.False(t, ok, "drain must clear the session message queue when nothing is kept")
+	kept, ok := a.messageQueue.Get(sessionID)
+	require.True(t, ok)
+	require.Len(t, kept, 1, "only the prompt queued after cancel must remain")
+	require.Equal(t, "after", kept[0].Prompt)
 }
 
-// TestDrainQueueForStep_NoMarkFoldsAllNonRunID verifies that with no
-// cancel mark recorded, every queued call without a RunID is folded.
-func TestDrainQueueForStep_NoMarkFoldsAllNonRunID(t *testing.T) {
+// TestDrainQueueForStep_NoMarkKeepsAllTurns verifies that with no cancel
+// mark recorded, every queued call remains a distinct turn.
+func TestDrainQueueForStep_NoMarkKeepsAllTurns(t *testing.T) {
 	t.Parallel()
 
 	env := testEnv(t)
@@ -114,19 +136,17 @@ func TestDrainQueueForStep_NoMarkFoldsAllNonRunID(t *testing.T) {
 		{SessionID: sessionID, Prompt: "b", acceptSeq: 5},
 	})
 
-	fold, canceledWithRunID := a.drainQueueForStep(sessionID)
-	require.Len(t, fold, 2, "no cancel mark means all non-RunID queued calls are folded")
+	canceledWithRunID := a.drainQueueForStep(sessionID)
 	require.Empty(t, canceledWithRunID)
+	kept, ok := a.messageQueue.Get(sessionID)
+	require.True(t, ok)
+	require.Len(t, kept, 2, "no cancel mark means every queued turn is retained")
 }
 
-// TestDrainQueueForStep_KeepsRunIDPromptsQueued is the core of fix 2: a
-// queued prompt that carries a RunID must NOT be folded into the active
-// turn. Folding it would silently absorb it into another turn and never
-// publish a RunComplete for its RunID, hanging a `ultra run` caller that
-// blocks on that event. Such prompts are left in the queue so the
-// recursive run path gives each its own turn and its own RunComplete.
-// Non-RunID prompts are still folded.
-func TestDrainQueueForStep_KeepsRunIDPromptsQueued(t *testing.T) {
+// TestDrainQueueForStep_KeepsPromptsQueued verifies that all queued prompts
+// remain distinct turns. Runtime-generated RunIDs make this independent of
+// whether a caller supplied a transport correlation ID.
+func TestDrainQueueForStep_KeepsPromptsQueued(t *testing.T) {
 	t.Parallel()
 
 	env := testEnv(t)
@@ -142,17 +162,16 @@ func TestDrainQueueForStep_KeepsRunIDPromptsQueued(t *testing.T) {
 		{SessionID: sessionID, RunID: "run-b", Prompt: "keep-me-too", acceptSeq: 3},
 	})
 
-	fold, canceledWithRunID := a.drainQueueForStep(sessionID)
+	canceledWithRunID := a.drainQueueForStep(sessionID)
 
-	require.Len(t, fold, 1, "only the non-RunID prompt is folded into the active turn")
-	require.Equal(t, "fold-me", fold[0].Prompt)
 	require.Empty(t, canceledWithRunID)
 
 	kept, ok := a.messageQueue.Get(sessionID)
-	require.True(t, ok, "RunID-bearing prompts must remain queued for the recursive run path")
-	require.Len(t, kept, 2)
-	require.Equal(t, "run-a", kept[0].RunID)
-	require.Equal(t, "run-b", kept[1].RunID)
+	require.True(t, ok, "queued prompts must remain queued for the next turn")
+	require.Len(t, kept, 3)
+	require.Equal(t, "fold-me", kept[0].Prompt)
+	require.Equal(t, "run-a", kept[1].RunID)
+	require.Equal(t, "run-b", kept[2].RunID)
 }
 
 // TestDrainQueueForStep_ReportsCanceledRunIDDrops verifies that a queued
@@ -177,9 +196,8 @@ func TestDrainQueueForStep_ReportsCanceledRunIDDrops(t *testing.T) {
 	})
 	a.cancelMark.Set(sessionID, 2)
 
-	fold, canceledWithRunID := a.drainQueueForStep(sessionID)
+	canceledWithRunID := a.drainQueueForStep(sessionID)
 
-	require.Empty(t, fold, "no uncanceled non-RunID prompts to fold")
 	require.Len(t, canceledWithRunID, 1,
 		"only the dropped RunID-bearing prompt needs a terminal RunComplete")
 	require.Equal(t, "run-canceled", canceledWithRunID[0].RunID)
@@ -314,7 +332,7 @@ func TestDrainQueueForStep_DroppedRunIDPublishesCancelledRunComplete(t *testing.
 	})
 	a.cancelMark.Set(sessionID, 2)
 
-	_, canceledWithRunID := a.drainQueueForStep(sessionID)
+	canceledWithRunID := a.drainQueueForStep(sessionID)
 	require.Len(t, canceledWithRunID, 1)
 	a.publishCanceledQueueDrops(canceledWithRunID)
 

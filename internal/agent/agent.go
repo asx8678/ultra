@@ -74,14 +74,9 @@ var (
 
 type SessionAgentCall struct {
 	SessionID string
-	// RunID, when non-empty, is the caller-supplied correlator that
-	// gets echoed back on the notify.RunComplete event emitted for
-	// this turn. It is preserved when the call is enqueued behind a
-	// busy session so the queued turn's terminal event is still
-	// recognisable to the original caller. Callers that need a
-	// reliable completion contract (e.g. `ultra run` against a
-	// session that may be busy) MUST set it; SessionID alone is
-	// ambiguous when concurrent turns share the same session.
+	// RunID identifies this turn and is echoed on its notify.RunComplete
+	// event. Run normalizes an empty value before dispatch, so every turn has
+	// a stable internal identity even when older transport clients omit it.
 	RunID            string
 	Prompt           string
 	ProviderOptions  fantasy.ProviderOptions
@@ -229,6 +224,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if err := ValidateCall(call); err != nil {
 		return nil, err
 	}
+	// All submissions have an identity before the busy/queue decision. Queue
+	// semantics therefore never depend on whether a frontend happened to
+	// supply a transport correlator.
+	call.RunID = EnsureRunID(call.RunID)
 
 	// genCtx/cancel are the run context and its cancel func, created under
 	// the per-session dispatch mutex below so a concurrent Cancel can observe
@@ -280,10 +279,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 
 	if a.IsSessionBusy(call.SessionID) {
-		// Busy: an earlier prompt is active. Queue this call so it is
-		// folded into (or sequenced after) the active turn, and release any
-		// accept reservation. A Cancel arriving after this point sees the
-		// active entry and clears the queue.
+		// Busy: an earlier prompt is active. Queue this call as its own turn
+		// and release any accept reservation. A Cancel arriving after this
+		// point sees the active entry and clears the queue.
 		//
 		// enqueueCall strips OnComplete: the caller that supplied the hook
 		// (typically coordinator.Run) has its own retry/coalesce scope that
@@ -450,9 +448,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
 
-	startTime := time.Now()
-	a.eventPromptSent(call.SessionID)
-
 	var stepMessages []fantasy.Message
 	var shouldSummarize bool
 	sanitizedToolCalls := make(map[string]bool)
@@ -482,26 +477,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			// Use latest tools (updated by SetTools when MCP tools change).
 			prepared.Tools = a.tools.Copy()
 
-			// Drain queued follow-up prompts for this step. Calls covered
-			// by a cancel recorded while they sat in the queue are dropped:
-			// a cancel that arrived after a prompt was queued must not let
-			// it run as part of this step. Coverage is per-call by accept
-			// sequence so a follow-up queued after the cancel (higher seq)
-			// is not dropped. A dropped prompt carrying a RunID still gets
-			// its terminal cancelled RunComplete so a caller waiting on it
-			// does not hang. Uncanceled prompts without a RunID are folded
-			// into this turn; uncanceled prompts with a RunID are left
-			// queued so each runs as its own turn (with its own
-			// RunComplete) via the recursive run path below.
-			fold, canceledRunIDs := a.drainQueueForStep(call.SessionID)
+			// Filter canceled queued submissions for this step. Uncanceled
+			// prompts remain queued and run as their own turns after the active
+			// turn completes; they are never injected into this model step.
+			canceledRunIDs := a.drainQueueForStep(call.SessionID)
 			a.publishCanceledQueueDrops(canceledRunIDs)
-			for _, queued := range fold {
-				userMessage, createErr := a.createUserMessage(callContext, queued)
-				if createErr != nil {
-					return callContext, prepared, createErr
-				}
-				prepared.Messages = append(prepared.Messages, userMessage.ToAIMessage()...)
-			}
 
 			prepared.Messages = a.workaroundProviderMediaLimitations(prepared.Messages, largeModel)
 
@@ -742,9 +722,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			},
 		},
 	})
-
-	a.eventPromptResponded(call.SessionID, time.Since(startTime).Truncate(time.Second))
-
 	if err != nil {
 		isHyper := largeModel.ModelCfg.Provider == hyper.Name
 		isCancelErr := errors.Is(err, context.Canceled)
@@ -1603,10 +1580,6 @@ func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session,
 		modelConfig.CostPer1MOutCached/1e6*float64(usage.CacheReadTokens) +
 		modelConfig.CostPer1MIn/1e6*float64(usage.InputTokens) +
 		modelConfig.CostPer1MOut/1e6*float64(usage.OutputTokens)
-
-	if !estimated {
-		a.eventTokensUsed(session.ID, model, usage, cost)
-	}
 
 	if estimated {
 		cost = 0

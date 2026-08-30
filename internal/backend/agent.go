@@ -45,6 +45,11 @@ func (b *Backend) SendMessage(workspaceID string, msg proto.AgentMessage) error 
 		return err
 	}
 
+	// Older clients may omit RunID, but the runtime never does: mint the
+	// turn identity before reserving and dispatching it so notifications and
+	// terminal fallback events are always attributable to one submission.
+	msg.RunID = agent.EnsureRunID(msg.RunID)
+
 	accept := ws.AgentCoordinator.BeginAccepted(msg.SessionID)
 
 	ws.runMu.Lock()
@@ -79,19 +84,16 @@ func (b *Backend) SendMessage(workspaceID string, msg proto.AgentMessage) error 
 // publishes the cancelled terminal marker) and produces no error
 // terminal event.
 //
-// When msg.RunID is non-empty it is attached to the context via
-// agent.WithRunID so the coordinator can stamp the terminal
-// notify.RunComplete event with that correlator. A run-complete marker
-// is also attached so the coordinator can report whether it published
-// the terminal event, letting runAgent avoid a duplicate fallback.
+// RunID is attached to the context via agent.WithRunID so the coordinator
+// can stamp the terminal notify.RunComplete event with that correlator. A
+// run-complete marker is also attached so the coordinator can report whether
+// it published the terminal event, letting runAgent avoid a duplicate
+// fallback.
 func (b *Backend) runAgent(ws *Workspace, msg proto.AgentMessage, accept *agent.AcceptedRun) {
 	defer ws.runWG.Done()
 	defer accept.Close()
 
-	ctx := ws.ctx
-	if msg.RunID != "" {
-		ctx = agent.WithRunID(ctx, msg.RunID)
-	}
+	ctx := agent.WithRunID(ws.ctx, msg.RunID)
 	ctx = agent.WithRunCompleteMarker(ctx)
 
 	_, err := ws.AgentCoordinator.RunAccepted(ctx, accept, msg.SessionID, msg.Prompt, proto.AttachmentsToMessage(msg.Attachments)...)
@@ -106,10 +108,10 @@ func (b *Backend) runAgent(ws *Workspace, msg proto.AgentMessage, accept *agent.
 		Message:   err.Error(),
 	})
 
-	// Reliable terminal fallback. Only needed when a RunID waiter
-	// exists and the coordinator has not already emitted the run's
-	// terminal RunComplete; otherwise this would be a duplicate.
-	if msg.RunID == "" || agent.RunCompletePublished(ctx) {
+	// Reliable terminal fallback is needed only when the coordinator has not
+	// already emitted this turn's terminal RunComplete; otherwise it would be
+	// a duplicate.
+	if agent.RunCompletePublished(ctx) {
 		return
 	}
 	if rc := ws.RunCompletions(); rc != nil {

@@ -80,6 +80,28 @@ func insertRunCompleteWorkspace(t *testing.T, b *Backend, base context.Context, 
 // RunComplete for the run's RunID. Without it, a `ultra run` caller
 // blocking on that RunID would hang because the lossy TypeAgentError
 // event is not a guaranteed terminal signal.
+func TestSendMessage_MintsMissingRunID(t *testing.T) {
+	t.Parallel()
+	b, _ := newTestBackend(t)
+	runErr := errors.New("update models failed")
+	ws := insertRunCompleteWorkspace(t, b, context.Background(), &errorCoordinator{err: runErr})
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := ws.RunCompletions().Subscribe(subCtx)
+
+	require.NoError(t, b.SendMessage(ws.ID, proto.AgentMessage{SessionID: "S1", Prompt: "hi"}))
+
+	select {
+	case ev := <-ch:
+		require.NotEmpty(t, ev.Payload.RunID, "runtime must mint an identity for callers that omit RunID")
+		require.Equal(t, "S1", ev.Payload.SessionID)
+		require.Equal(t, runErr.Error(), ev.Payload.Error)
+	case <-time.After(2 * time.Second):
+		t.Fatal("no terminal RunComplete published for an uncorrelated request")
+	}
+}
+
 func TestRunAgent_PreRunErrorPublishesTerminalRunComplete(t *testing.T) {
 	t.Parallel()
 	b, _ := newTestBackend(t)

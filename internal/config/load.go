@@ -27,9 +27,9 @@ import (
 	"github.com/asx8678/ultra/internal/filepathext"
 	"github.com/asx8678/ultra/internal/fsext"
 	"github.com/asx8678/ultra/internal/home"
+	"github.com/asx8678/ultra/internal/jsonmerge"
 	"github.com/asx8678/ultra/internal/shellconfig"
 	powernapConfig "github.com/charmbracelet/x/powernap/pkg/config"
-	"github.com/qjebbs/go-jsons"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -1060,7 +1060,7 @@ func loadFromBytes(configs [][]byte) (*Config, error) {
 		return &Config{}, nil
 	}
 
-	data, err := jsons.Merge(configs)
+	data, err := jsonmerge.Merge(configs...)
 	if err != nil {
 		return nil, err
 	}

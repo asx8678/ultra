@@ -107,9 +107,8 @@ func (fastModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.Obje
 //
 // fastModel is used as the small model so GenerateTitle (which runs on the
 // small model) does not race into the probe's inFlight/maxSeen counters. The
-// queue count is not asserted because PrepareStep drains queued prompts into
-// the active step before the model's Stream is called — by the time "entered"
-// fires the queue is already empty by design.
+// queue count is not asserted because concurrent submissions may be observed
+// before or after the active stream reaches its synchronization point.
 func TestRun_ConcurrentInProcessDispatchStartsOneRun(t *testing.T) {
 	t.Parallel()
 	env := testEnv(t)
@@ -144,9 +143,8 @@ func TestRun_ConcurrentInProcessDispatchStartsOneRun(t *testing.T) {
 		t.Fatal("no run became active")
 	}
 
-	// Every other dispatch must have either queued (and been folded into the
-	// active step by PrepareStep) or never started its own Stream. Either way,
-	// at most one Stream may be in flight and the high-water mark must be one.
+	// Every other dispatch must queue behind the active turn. At most one Stream
+	// may be in flight and the high-water mark must be one.
 	require.Equal(t, int32(1), model.inFlight.Load(), "exactly one run may be active")
 	require.Equal(t, int32(1), model.maxSeen.Load(), "no two runs may stream concurrently for one session")
 

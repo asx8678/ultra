@@ -1,6 +1,9 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"uuid"
+)
 
 // runIDContextKey is the unexported context key used to carry a
 // caller-supplied RunID from the workspace HTTP boundary
@@ -11,14 +14,30 @@ import "context"
 // originating caller.
 type runIDContextKey struct{}
 
-// WithRunID returns ctx tagged with a per-request RunID. It is the
-// boundary helper for callers that need their SendMessage→Run
-// terminal event to be uniquely correlatable (e.g. `ultra run`
-// against a session that may be busy). Empty runIDs are stored
-// as-is; downstream code treats an empty RunID as "caller did not
-// supply one" and falls back to SessionID-only correlation.
+// NewRunID creates the opaque identifier for one submitted turn. Run IDs are
+// created at the runtime boundary rather than by a particular frontend so
+// in-process, client/server, and future JSONL callers share the same
+// completion contract.
+func NewRunID() string {
+	return uuid.New().String()
+}
+
+// EnsureRunID preserves a caller-provided identifier or creates one when the
+// caller does not need to correlate the turn itself. This keeps RunID
+// mandatory inside the runtime while preserving backwards-compatible request
+// payloads at transport boundaries.
+func EnsureRunID(runID string) string {
+	if runID != "" {
+		return runID
+	}
+	return NewRunID()
+}
+
+// WithRunID returns ctx tagged with a per-request RunID. Empty runIDs are
+// normalized so downstream code always sees a stable identifier for the
+// submitted turn.
 func WithRunID(ctx context.Context, runID string) context.Context {
-	return context.WithValue(ctx, runIDContextKey{}, runID)
+	return context.WithValue(ctx, runIDContextKey{}, EnsureRunID(runID))
 }
 
 // RunIDFromContext returns the RunID set by [WithRunID], or "" if

@@ -68,8 +68,8 @@ ultra run --continue "Follow up on your last response"
 			useLast, _    = cmd.Flags().GetBool("continue")
 		)
 
-		// Cancel on SIGINT or SIGTERM.
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+		// Cancel on SIGINT or SIGTERM. os.Kill cannot be intercepted.
+		ctx, cancel := signal.NotifyContext(context.Background(), addSignals([]os.Signal{os.Interrupt})...)
 		defer cancel()
 
 		prompt := strings.Join(args, " ")

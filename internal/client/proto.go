@@ -479,11 +479,10 @@ func (c *Client) UpdateAgent(ctx context.Context, id string) error {
 
 // SendMessage sends a message to the agent for a workspace.
 //
-// When runID is non-empty it is echoed back on the resulting
-// proto.RunComplete event, giving the caller a unique correlator
-// for completion detection. Pass "" when the caller does not need
-// to distinguish its own turn's terminal event from any concurrent
-// turn on the same session (e.g. interactive TUI usage).
+// RunID is echoed back on the resulting proto.RunComplete event. Callers
+// that need to match their own terminal event should provide a fresh value.
+// The server mints one when it is omitted, so every submitted turn still has
+// an internal lifecycle identity.
 func (c *Client) SendMessage(ctx context.Context, id string, sessionID, runID, prompt string, attachments ...message.Attachment) error {
 	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent", id), nil, jsonBody(proto.AgentMessage{
 		SessionID:   sessionID,

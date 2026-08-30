@@ -29,23 +29,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// parseLevel converts an MCP logging level string to a slog.Level. The
-// entire MCP logging feature is deprecated per SEP-2577 but remains
-// functional; servers may still send log notifications during the
-// deprecation window.
-func parseLevel(level string) slog.Level {
-	switch level {
-	case "info":
-		return slog.LevelInfo
-	case "notice":
-		return slog.LevelInfo
-	case "warning":
-		return slog.LevelWarn
-	default:
-		return slog.LevelDebug
-	}
-}
-
 // ClientSession wraps an mcp.ClientSession with a context cancel function so
 // that the context created during session establishment is properly cleaned up
 // on close.
@@ -968,12 +951,7 @@ func createSession(ctx context.Context, cfg *config.ConfigStore, name string, m 
 	// answer that POST with 404 ("session not found"), which the SDK treats
 	// as fatal and tears the connection down. Setting the flag lets those
 	// servers connect at the cost of live list-changed notifications.
-	opts := &mcp.ClientOptions{
-		LoggingMessageHandler: func(ctx context.Context, req *mcp.LoggingMessageRequest) {
-			level := parseLevel(string(req.Params.Level))
-			slog.Log(ctx, level, "MCP log", "name", name, "logger", req.Params.Logger, "data", req.Params.Data)
-		},
-	}
+	opts := &mcp.ClientOptions{}
 	if !m.IsSessionless(resolver) {
 		opts.ToolListChangedHandler = func(context.Context, *mcp.ToolListChangedRequest) {
 			broker.Publish(pubsub.UpdatedEvent, Event{

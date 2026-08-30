@@ -175,7 +175,7 @@ func init() {
 }
 
 func getLogoutContext() context.Context {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	ctx, cancel := signal.NotifyContext(context.Background(), addSignals([]os.Signal{os.Interrupt})...)
 	go func() {
 		<-ctx.Done()
 		cancel()

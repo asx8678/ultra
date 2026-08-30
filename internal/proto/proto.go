@@ -119,21 +119,14 @@ func (a AgentInfo) IsZero() bool {
 
 // AgentMessage represents a message sent to the agent.
 //
-// RunID, when non-empty, is echoed back on the [RunComplete] event
-// emitted for the resulting turn. Callers that need to correlate a
-// specific SendMessage with its terminal event (notably
-// `ultra run`, which may attach to a busy session whose currently
-// running turn finishes first) should set it to a fresh unique
-// value before the request. Server-side propagation flows through
-// agent.WithRunID on the request context into the
-// SessionAgentCall; it is preserved across the busy-session queue.
-// When empty the resulting RunComplete carries an empty RunID and
-// callers must fall back to SessionID-only filtering, which
-// remains correct only when no other turns are in flight for the
-// same session.
+// RunID identifies the submitted turn and is echoed on its [RunComplete]
+// event. Clients should provide a fresh value when they need to correlate the
+// request before sending it (notably `ultra run`). The server normalizes an
+// omitted value before accepting the request, so every resulting turn and
+// terminal event has an identity.
 type AgentMessage struct {
 	SessionID   string       `json:"session_id"`
-	RunID       string       `json:"run_id,omitempty"`
+	RunID       string       `json:"run_id"`
 	Prompt      string       `json:"prompt"`
 	Attachments []Attachment `json:"attachments,omitempty"`
 }

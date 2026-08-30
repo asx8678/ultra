@@ -349,9 +349,6 @@ type Styles struct {
 		ContentCodeBg         color.Color    // Background color for syntax highlighting
 		Body                  lipgloss.Style // Body content padding (PaddingLeft(2))
 
-		// Deprecated - kept for backward compatibility
-		ContentBg         lipgloss.Style // Content background
-		ContentText       lipgloss.Style // Content text
 		ContentLineNumber lipgloss.Style // Line numbers in code
 
 		// State message styles

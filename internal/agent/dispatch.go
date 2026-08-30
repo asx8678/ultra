@@ -190,25 +190,19 @@ func (a *sessionAgent) enqueueCall(call SessionAgentCall) {
 	a.messageQueue.Set(call.SessionID, existing)
 }
 
-// drainQueueForStep partitions the session's queued calls for the current
+// drainQueueForStep filters the session's queued calls for the current
 // streaming step under the per-session dispatch mutex so the filtering is
 // atomic against a concurrent Cancel: canceledBySeq requires the caller to
 // hold that mutex, and evaluating it here (rather than after unlocking)
 // prevents a cancel recorded between the drain and the check from being
 // observed inconsistently.
 //
-// Calls covered by a pending cancel are dropped; the dropped ones that
-// carry a RunID are returned in canceledWithRunID so the caller can
-// publish their terminal cancelled RunComplete (a caller waiting on that
-// RunID, e.g. `ultra run`, would otherwise hang). Uncanceled calls without
-// a RunID are returned in fold to be folded into the active turn,
-// preserving the existing follow-up behavior. Uncanceled calls that carry
-// a RunID are left in the queue so each runs as its own turn via the
-// recursive run path and publishes its own RunComplete, giving every
-// RunID-bearing prompt an explicit lifecycle instead of being silently
-// absorbed into another turn. fold is processed by the caller without the
-// lock held.
-func (a *sessionAgent) drainQueueForStep(sessionID string) (fold, canceledWithRunID []SessionAgentCall) {
+// A queued prompt is always a distinct turn. Public Run calls assign RunID
+// before this queue is reached, and no prompt is folded into an unrelated
+// active model step. Calls covered by a pending cancel are removed; the
+// removed RunID-bearing calls are returned so callers can publish their
+// terminal cancelled RunComplete.
+func (a *sessionAgent) drainQueueForStep(sessionID string) (canceledWithRunID []SessionAgentCall) {
 	dispatchLock := a.sessionMu(sessionID)
 	dispatchLock.Lock()
 	defer dispatchLock.Unlock()
@@ -221,18 +215,14 @@ func (a *sessionAgent) drainQueueForStep(sessionID string) (fold, canceledWithRu
 			}
 			continue
 		}
-		if queued.RunID != "" {
-			keep = append(keep, queued)
-			continue
-		}
-		fold = append(fold, queued)
+		keep = append(keep, queued)
 	}
 	if len(keep) == 0 {
 		a.messageQueue.Del(sessionID)
 	} else {
 		a.messageQueue.Set(sessionID, keep)
 	}
-	return fold, canceledWithRunID
+	return canceledWithRunID
 }
 
 // publishCanceledQueueDrops emits a terminal cancelled RunComplete for

@@ -69,13 +69,11 @@ func (m *gatedStreamModel) StreamObject(ctx context.Context, call fantasy.Object
 	return nil, errors.New("not implemented")
 }
 
-// TestRun_QueuedRunIDPromptRunsRecursivelyAndPublishesRunComplete is the
-// end-to-end proof of fix 2: a prompt carrying a RunID that is queued
-// behind a busy session must NOT be silently folded into the active turn.
-// It runs as its own turn via the recursive run path and publishes its
-// own terminal RunComplete, so a `ultra run` caller blocking on that
-// RunID does not hang. The active turn keeps its own RunComplete too.
-func TestRun_QueuedRunIDPromptRunsRecursivelyAndPublishesRunComplete(t *testing.T) {
+// TestRun_QueuedPromptGetsDistinctRunIDAndRunComplete proves that every
+// submitted prompt gets a distinct lifecycle even when its caller did not
+// supply a transport RunID. A busy-session prompt runs after the active turn
+// and each turn emits exactly one terminal RunComplete.
+func TestRun_QueuedPromptGetsDistinctRunIDAndRunComplete(t *testing.T) {
 	t.Parallel()
 
 	env := testEnv(t)
@@ -124,15 +122,21 @@ func TestRun_QueuedRunIDPromptRunsRecursivelyAndPublishesRunComplete(t *testing.
 	}
 	require.True(t, sa.IsSessionBusy(sess.ID), "main run must be active before enqueueing the follow-up")
 
-	// Enqueue a RunID-bearing follow-up behind the busy session.
+	// Enqueue an uncorrelated follow-up behind the busy session. Run must mint
+	// its internal RunID before it reaches the queue.
 	res, err := sa.Run(t.Context(), SessionAgentCall{
 		SessionID: sess.ID,
-		RunID:     "run-follow",
 		Prompt:    "follow",
 	})
 	require.NoError(t, err)
 	require.Nil(t, res, "a busy-session follow-up must enqueue and return (nil, nil)")
-	require.Equal(t, 1, sa.QueuedPrompts(sess.ID), "the follow-up must be queued, not folded")
+	require.Equal(t, 1, sa.QueuedPrompts(sess.ID), "the follow-up must be queued")
+	queued, ok := sa.messageQueue.Get(sess.ID)
+	require.True(t, ok)
+	require.Len(t, queued, 1)
+	followRunID := queued[0].RunID
+	require.NotEmpty(t, followRunID, "queued submission must receive a runtime RunID")
+	require.NotEqual(t, "run-main", followRunID, "each submitted turn needs its own identity")
 
 	// Release the main turn so it completes and hands off to the queue.
 	close(large.gate)
@@ -155,14 +159,13 @@ func TestRun_QueuedRunIDPromptRunsRecursivelyAndPublishesRunComplete(t *testing.
 	require.Empty(t, main.Error)
 	require.False(t, main.Cancelled)
 
-	follow, ok := got["run-follow"]
-	require.True(t, ok,
-		"the queued RunID prompt must publish its own RunComplete instead of being folded silently")
+	follow, ok := got[followRunID]
+	require.True(t, ok, "the queued prompt must publish its own terminal RunComplete")
 	require.Empty(t, follow.Error)
 	require.False(t, follow.Cancelled)
 	require.Equal(t, "done", follow.Text, "the queued prompt ran as its own turn")
 
-	// Two distinct assistant turns prove the follow-up was not folded.
+	// Two distinct assistant turns prove the follow-up remained a distinct turn.
 	msgs, err := env.messages.List(t.Context(), sess.ID)
 	require.NoError(t, err)
 	var assistants, follows int

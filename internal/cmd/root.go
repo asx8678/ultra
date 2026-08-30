@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -889,6 +888,10 @@ func startDetachedServer(cmd *cobra.Command, hostURL *url.URL) error {
 	return nil
 }
 
+// maxStdinBytes bounds the amount of text piped into `ultra run` so that a
+// large streamed input cannot exhaust memory via an unbounded read.
+const maxStdinBytes = 32 << 20
+
 func MaybePrependStdin(prompt string) (string, error) {
 	if term.IsTerminal(os.Stdin.Fd()) {
 		return prompt, nil
@@ -901,11 +904,24 @@ func MaybePrependStdin(prompt string) (string, error) {
 	if fi.Mode()&os.ModeNamedPipe == 0 && !fi.Mode().IsRegular() {
 		return prompt, nil
 	}
-	bts, err := io.ReadAll(os.Stdin)
+	return prependStdin(prompt, os.Stdin)
+}
+
+// prependStdin reads from r (bounded to maxStdinBytes) and prepends it to
+// prompt. It is split out from [MaybePrependStdin] so the size boundary and
+// concatenation semantics can be tested without touching the process-global
+// os.Stdin.
+func prependStdin(prompt string, r io.Reader) (string, error) {
+	lr := io.LimitReader(r, maxStdinBytes+1)
+	var sb strings.Builder
+	n, err := io.Copy(&sb, lr)
 	if err != nil {
 		return prompt, err
 	}
-	return string(bts) + "\n\n" + prompt, nil
+	if n > maxStdinBytes {
+		return prompt, fmt.Errorf("stdin exceeds maximum size of %d bytes", maxStdinBytes)
+	}
+	return sb.String() + "\n\n" + prompt, nil
 }
 
 // resolveWorkspaceSessionID resolves a session ID that may be a full
@@ -955,27 +971,3 @@ func ResolveCwd(cmd *cobra.Command) (string, error) {
 	}
 	return cwd, nil
 }
-
-func createDotUltraDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("failed to create data directory: %q %w", dir, err)
-	}
-
-	gitIgnorePath := filepath.Join(dir, ".gitignore")
-	content, err := os.ReadFile(gitIgnorePath)
-
-	// create or update if old version
-	if os.IsNotExist(err) || string(content) == oldGitIgnore {
-		if err := os.WriteFile(gitIgnorePath, []byte(defaultGitIgnore), 0o644); err != nil {
-			return fmt.Errorf("failed to create .gitignore file: %q %w", gitIgnorePath, err)
-		}
-	}
-
-	return nil
-}
-
-//go:embed gitignore/old
-var oldGitIgnore string
-
-//go:embed gitignore/default
-var defaultGitIgnore string

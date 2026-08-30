@@ -275,20 +275,10 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 		}
 	}
 
-	// Non-interactive runs get a single shot at the tool palette, so wait for
-	// MCP initialization to settle before reading MCP tools. The coordinator
-	// waits again for the same reason (it is the gate the client/server path
-	// goes through); doing it here too surfaces the failure before we create a
-	// session, and lets the UpdateModels below see every MCP tool. The wait is
-	// bounded so a server wedged mid-handshake cannot stall the one-shot run
-	// for its full connect timeout; past the budget the run proceeds without
-	// the unfinished servers' tools.
-	if err := mcp.WaitForInitBudget(ctx, mcp.InitWaitBudget); err != nil {
-		return fmt.Errorf("failed to wait for MCP initialization: %w", err)
-	}
-
-	// force update of agent models before running so mcp tools are loaded
-	app.AgentCoordinator.UpdateModels(ctx)
+	// The coordinator owns the one bounded MCP readiness wait and runtime
+	// refresh for every execution profile. Keeping that work at the runtime
+	// boundary avoids rebuilding the same model/tool snapshot twice for a
+	// local non-interactive turn.
 
 	defer stopSpinner()
 
@@ -311,9 +301,13 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 		slog.Info("Created session for non-interactive run", "session_id", sess.ID)
 	}
 
-	// Automatically approve all permission requests for this non-interactive
-	// session.
-	app.Permissions.AutoApproveSession(sess.ID)
+	// Only auto-approve permission requests for this non-interactive session
+	// when permission-skip (yolo) mode is explicitly enabled. Without it the
+	// session runs under the normal permission policy, so headless execution
+	// never silently becomes yolo merely because stdout is not a TTY.
+	if app.Permissions.SkipRequests() {
+		app.Permissions.AutoApproveSession(sess.ID)
+	}
 
 	type response struct {
 		result *fantasy.AgentResult
