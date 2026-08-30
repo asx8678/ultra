@@ -634,6 +634,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		if err != nil {
 			return err
 		}
+		systemPrompt = addFabricCodeModeGuidance(systemPrompt, agent, isSubAgent)
 		result.SetSystemPrompt(systemPrompt)
 		return nil
 	})

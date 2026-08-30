@@ -2,6 +2,7 @@ package fabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -77,13 +78,9 @@ type FabricExecRequest struct {
 	Strings          map[string]string
 	Timeout          time.Duration
 	MemoryLimitBytes int64
-	TokenBudget      int64
 	AgentBudget      int
 	CapabilityViewID string
-	IdempotencyKey   string
 	ResultMaxBytes   int
-	DisplayTitle     string
-	DisplayCompact   bool
 }
 
 // OuterInvocationContext binds one Fabric execution to an Ultra tool call.
@@ -102,6 +99,7 @@ const (
 	ActivityPhase         ExecutionActivityKind = "phase"
 	ActivityCallStarted   ExecutionActivityKind = "call.started"
 	ActivityCallCompleted ExecutionActivityKind = "call.completed"
+	ActivityProgress      ExecutionActivityKind = "progress"
 )
 
 // ExecutionActivity is a bounded presentation update. The terminal execution
@@ -120,6 +118,8 @@ type ExecutionActivity struct {
 	Outcome          ExecutionOutcome      `json:"outcome,omitempty"`
 	FailureStage     FailureStage          `json:"failure_stage,omitempty"`
 	Error            string                `json:"error,omitempty"`
+	Message          string                `json:"message,omitempty"`
+	Data             JSONObject            `json:"data,omitempty"`
 }
 
 // FabricExecResult is the bounded outer tool result.
@@ -142,7 +142,56 @@ const (
 	MaxMemoryBytes = 256 << 20
 	// MaxAgentBudget bounds nested agent launches requested by one execution.
 	MaxAgentBudget = 16
+	// MinResultBytes is the smallest useful bounded JSON execution envelope.
+	MinResultBytes = 512
+	// MaxResultBytes is the largest model-visible Fabric result envelope.
+	MaxResultBytes = 4 << 20
 )
+
+// MarshalExecResult encodes a complete Fabric result within maxBytes. When the
+// rich result exceeds the bound it returns a compact, deterministic failure
+// envelope rather than leaking unbounded trace, logs, diagnostics, or values.
+func MarshalExecResult(result FabricExecResult, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = DefaultJSONLimits().MaxBytes
+	}
+	if maxBytes < MinResultBytes || maxBytes > MaxResultBytes {
+		return nil, fmt.Errorf("fabric result limit must be between %d and %d bytes", MinResultBytes, MaxResultBytes)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) <= maxBytes {
+		return encoded, nil
+	}
+
+	counts := result.Trace.Counts
+	counts.DroppedOperations += len(result.Trace.Operations)
+	counts.DroppedValues += len(result.Logs) + len(result.Diagnostics)
+	if result.Value != nil {
+		counts.DroppedValues++
+	}
+	message := "Fabric result exceeded result_max_bytes; rich payload omitted"
+	compact := FabricExecResult{
+		ExecutionID: result.ExecutionID,
+		Outcome:     OutcomeFailed,
+		Error:       message,
+		Logs:        []string{},
+		Trace: ExecutionTrace{
+			Kind: "ultra.fabric.execution", Version: 1, Outcome: OutcomeFailed,
+			Counts: counts, Error: message,
+		},
+	}
+	encoded, err = json.Marshal(compact)
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) > maxBytes {
+		return nil, fmt.Errorf("bounded Fabric result envelope exceeds %d bytes", maxBytes)
+	}
+	return encoded, nil
+}
 
 // ExecutionService runs checked source against one pinned registry view.
 type ExecutionService struct {
@@ -335,8 +384,11 @@ func (s *ExecutionService) validateExecutionRequest(request FabricExecRequest) e
 		return fmt.Errorf("fabric agent budget must be between 0 and %d", MaxAgentBudget)
 	}
 	limits := normalizeJSONLimits(s.Limits)
-	if request.ResultMaxBytes > limits.MaxBytes {
-		return fmt.Errorf("fabric result limit exceeds %d bytes", limits.MaxBytes)
+	if request.ResultMaxBytes != 0 && request.ResultMaxBytes < MinResultBytes {
+		return fmt.Errorf("fabric result limit must be at least %d bytes", MinResultBytes)
+	}
+	if request.ResultMaxBytes > limits.MaxBytes || request.ResultMaxBytes > MaxResultBytes {
+		return fmt.Errorf("fabric result limit exceeds %d bytes", min(limits.MaxBytes, MaxResultBytes))
 	}
 	if err := ValidateJSON(request.Strings, limits); err != nil {
 		return fmt.Errorf("fabric named strings: %w", err)
@@ -413,7 +465,17 @@ func executionErrorOutcome(err error) ExecutionOutcome {
 	}
 }
 
-func (b *executionBridge) Progress(ActivityUpdate) error {
+func (b *executionBridge) Progress(update ActivityUpdate) error {
+	message, _ := projectTraceString(update.Message)
+	data := update.Data
+	limits := DefaultJSONLimits()
+	limits.MaxBytes = 8 << 10
+	if ValidateJSON(data, limits) != nil {
+		data = nil
+	}
+	b.service.publishActivity(b.outer, ExecutionActivity{
+		Kind: ActivityProgress, Message: message, Data: cloneJSONObject(data),
+	})
 	return nil
 }
 

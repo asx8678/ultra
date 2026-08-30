@@ -52,6 +52,9 @@ func (h *hookedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 }
 
 func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if tools.FabricHookPrepared(ctx) {
+		return h.inner.Run(ctx, call)
+	}
 	sessionID := tools.GetSessionFromContext(ctx)
 	result, err := h.runner.Run(ctx, hooks.EventPreToolUse, sessionID, call.Name, call.Input)
 	if err != nil {

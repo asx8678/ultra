@@ -293,8 +293,28 @@ func installGojaFabricBridge(
 	}); err != nil {
 		return fmt.Errorf("install Fabric literal bridge: %w", err)
 	}
-	if err := bridge.Set("tokens", func() int64 { return 0 }); err != nil {
-		return fmt.Errorf("install Fabric token bridge: %w", err)
+	if err := bridge.Set("progress", func(call goja.FunctionCall) goja.Value {
+		normalized, err := normalizeGojaJSON(call.Argument(0).Export())
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		var update fabric.ActivityUpdate
+		if err := json.Unmarshal(encoded, &update); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		if update.Kind == "" {
+			panic(vm.NewGoError(errors.New("fabric progress kind is required")))
+		}
+		if err := request.Bridge.Progress(update); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	}); err != nil {
+		return fmt.Errorf("install Fabric progress bridge: %w", err)
 	}
 	if err := bridge.Set("log", func(value goja.Value) {
 		logs.append(value.String())

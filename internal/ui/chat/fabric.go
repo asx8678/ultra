@@ -157,19 +157,19 @@ func (r *FabricToolRenderContext) liveActivityLines(sty *styles.Styles) []string
 		lines = append(lines, fabricDetailLine(sty, "Phase", r.item.phase))
 	}
 	if len(r.item.activities) > 0 {
-		active := 0
+		started := 0
 		completed := 0
 		for _, activity := range r.item.activities {
 			switch activity.Kind {
 			case fabric.ActivityCallStarted:
-				active++
+				started++
 			case fabric.ActivityCallCompleted:
 				completed++
 			}
 		}
 		lines = append(lines, fabricDetailLine(sty, "Live calls", fmt.Sprintf(
 			"%d observed · %d active · %d completed",
-			len(r.item.activities), active, completed,
+			started+completed, started, completed,
 		)))
 	}
 	start := max(0, len(r.item.activities)-fabricVisibleCalls)
@@ -338,6 +338,10 @@ func fabricCallCounts(operations []fabric.TraceOperation) (succeeded, failed int
 }
 
 func fabricActivityLine(sty *styles.Styles, activity fabric.ExecutionActivity) string {
+	if activity.Kind == fabric.ActivityProgress {
+		message := cmp.Or(activity.Message, "progress update")
+		return toolIcon(sty, ToolStatusRunning) + " " + sty.Tool.ParamMain.Render("progress") + " " + sty.Tool.ParamKey.Render(message)
+	}
 	status := ToolStatusRunning
 	detail := "running"
 	if activity.Kind == fabric.ActivityCallCompleted {

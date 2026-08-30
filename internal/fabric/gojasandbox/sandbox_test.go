@@ -47,7 +47,8 @@ func TestSandboxInstallsPinnedCapabilitiesAndNamedStrings(t *testing.T) {
 }
 
 type recordingSandboxBridge struct {
-	calls []string
+	calls   []string
+	updates []fabric.ActivityUpdate
 }
 
 func (b *recordingSandboxBridge) Call(
@@ -59,7 +60,27 @@ func (b *recordingSandboxBridge) Call(
 	return fabric.JSONObject{"ok": true}, nil
 }
 
-func (*recordingSandboxBridge) Progress(fabric.ActivityUpdate) error { return nil }
+func (b *recordingSandboxBridge) Progress(update fabric.ActivityUpdate) error {
+	b.updates = append(b.updates, update)
+	return nil
+}
+
+func TestSandboxPublishesGuestProgress(t *testing.T) {
+	t.Parallel()
+	sandbox := NewGojaSandbox()
+	t.Cleanup(func() { require.NoError(t, sandbox.Close()) })
+	bridge := &recordingSandboxBridge{}
+	output, err := sandbox.Execute(t.Context(), fabric.SandboxExecutionRequest{
+		JavaScript: `fabric.progress({ kind: "status", message: "indexing", data: { files: 3 } }); return true;`,
+		Bridge:     bridge,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fabric.OutcomeSucceeded, output.Outcome)
+	require.Len(t, bridge.updates, 1)
+	require.Equal(t, "status", bridge.updates[0].Kind)
+	require.Equal(t, "indexing", bridge.updates[0].Message)
+	require.Equal(t, float64(3), bridge.updates[0].Data["files"])
+}
 
 func TestSandboxNoAmbientAuthority(t *testing.T) {
 	t.Parallel()

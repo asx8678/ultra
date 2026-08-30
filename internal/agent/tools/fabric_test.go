@@ -2,6 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -160,7 +164,74 @@ func TestUltraFabricAuthorizerDeniesUnknownToolInRestrictedMode(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, decision.Allowed)
-	require.Contains(t, decision.Reason, "authoritative Ultra metadata")
+	require.Contains(t, decision.Reason, "permission denied")
+}
+
+func TestUltraFabricAuthorizerUnknownToolModes(t *testing.T) {
+	t.Parallel()
+	permissions := permission.NewPermissionService(t.TempDir(), false, nil)
+	authorizer := UltraFabricAuthorizer{Permissions: permissions}
+	request := fabric.AuthorizationRequest{
+		Ref:        "host.mcp_dynamic_call",
+		Descriptor: fabric.ActionDescriptor{Name: "mcp_dynamic_call", Description: "dynamic MCP action"},
+		Context:    fabric.InvocationContext{SessionID: "session", NestedToolCallID: "nested", CWD: t.TempDir()},
+	}
+	for _, mode := range []permission.Mode{permission.ModeAsk, permission.ModeReadOnly, permission.ModeAcceptEdits} {
+		permission.SetSessionMode(permissions, "session", mode)
+		decision, err := authorizer.Authorize(t.Context(), request)
+		require.NoError(t, err)
+		require.False(t, decision.Allowed, mode)
+		require.NotEmpty(t, decision.Reason, mode)
+	}
+	permission.SetSessionMode(permissions, "session", permission.ModeYolo)
+	decision, err := authorizer.Authorize(t.Context(), request)
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+}
+
+func TestUltraFabricProviderPropagatesSessionToAgent(t *testing.T) {
+	t.Parallel()
+	var session string
+	native := fantasy.NewAgentTool(
+		"agent", "test agent",
+		func(ctx context.Context, _ fabricTestParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			session = GetSessionFromContext(ctx)
+			return fantasy.NewTextResponse(session), nil
+		},
+	)
+	provider, err := NewUltraFabricProvider([]fantasy.AgentTool{native})
+	require.NoError(t, err)
+	result, err := provider.Invoke(t.Context(), "agent", fabric.JSONObject{}, fabric.InvocationContext{
+		SessionID: "fabric-session", ExecutionID: "execution", NestedToolCallID: "nested",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fabric-session", session)
+	require.Equal(t, "fabric-session", result.(fabric.JSONObject)["content"])
+}
+
+func TestUltraFabricProviderHookRunsExactlyOnce(t *testing.T) {
+	t.Parallel()
+	counter := filepath.Join(t.TempDir(), "hook-count")
+	runner := hooks.NewRunner([]config.HookConfig{{
+		Command: fmt.Sprintf("printf x >> %q; echo '{\"decision\":\"allow\"}'", counter),
+	}}, t.TempDir(), t.TempDir())
+	native := fantasy.NewAgentTool(
+		"view", "test view",
+		func(ctx context.Context, _ fabricTestParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			require.True(t, FabricHookPrepared(ctx))
+			return fantasy.NewTextResponse("ok"), nil
+		},
+	)
+	provider, err := NewUltraFabricProviderWithHooks([]fantasy.AgentTool{native}, runner)
+	require.NoError(t, err)
+	invocation := fabric.InvocationContext{SessionID: "session", ExecutionID: "execution", NestedToolCallID: "nested"}
+	prepared, err := provider.PrepareArguments(t.Context(), "view", fabric.JSONObject{"path": "x"}, invocation)
+	require.NoError(t, err)
+	_, err = provider.Invoke(t.Context(), "view", prepared, invocation)
+	require.NoError(t, err)
+	contents, err := os.ReadFile(counter)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(contents), "x"))
 }
 
 func TestFabricExecToolRespectsPermissionPolicy(t *testing.T) {

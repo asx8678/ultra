@@ -15,6 +15,7 @@ type (
 	messageIDContextKey string
 	supportsImagesKey   string
 	modelNameKey        string
+	fabricHookKey       string
 )
 
 const (
@@ -25,7 +26,8 @@ const (
 	// SupportsImagesContextKey is the key for the model's image support capability.
 	SupportsImagesContextKey supportsImagesKey = "supports_images"
 	// ModelNameContextKey is the key for the model name in the context.
-	ModelNameContextKey modelNameKey = "model_name"
+	ModelNameContextKey   modelNameKey  = "model_name"
+	fabricHookPreparedKey fabricHookKey = "fabric_hook_prepared"
 )
 
 // getContextValue is a generic helper that retrieves a typed value from context.
@@ -59,6 +61,17 @@ func GetSupportsImagesFromContext(ctx context.Context) bool {
 // GetModelNameFromContext retrieves the model name from the context.
 func GetModelNameFromContext(ctx context.Context) string {
 	return getContextValue(ctx, ModelNameContextKey, "")
+}
+
+// WithFabricHookPrepared marks a call whose PreToolUse hook already ran before
+// Fabric's authoritative argument validation.
+func WithFabricHookPrepared(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fabricHookPreparedKey, true)
+}
+
+// FabricHookPrepared reports whether Fabric already ran PreToolUse.
+func FabricHookPrepared(ctx context.Context) bool {
+	return getContextValue(ctx, fabricHookPreparedKey, false)
 }
 
 // NewPermissionDeniedResponse returns a tool response indicating the user

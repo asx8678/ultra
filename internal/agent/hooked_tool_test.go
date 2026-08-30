@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/asx8678/ultra/internal/agent/tools"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/hooks"
 	"github.com/asx8678/ultra/internal/permission"
@@ -44,6 +45,20 @@ func newRunner(t *testing.T, cmd string) *hooks.Runner {
 	}
 	require.NoError(t, cfg.ValidateHooks())
 	return hooks.NewRunner(cfg.Hooks[hooks.EventPreToolUse], t.TempDir(), t.TempDir())
+}
+
+func TestHookedTool_SkipsHookAlreadyPreparedByFabric(t *testing.T) {
+	t.Parallel()
+
+	inner := &fakeTool{name: "view", resp: fantasy.NewTextResponse("ok")}
+	runner := newRunner(t, `echo '{"decision":"deny","reason":"must not run twice"}'`)
+	tool := newHookedTool(inner, runner)
+	ctx := tools.WithFabricHookPrepared(t.Context())
+
+	response, err := tool.Run(ctx, fantasy.ToolCall{ID: "call-fabric", Name: "view"})
+	require.NoError(t, err)
+	require.True(t, inner.called)
+	require.False(t, response.IsError)
 }
 
 func TestHookedTool_AllowStampsHookApproval(t *testing.T) {

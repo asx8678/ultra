@@ -1,7 +1,10 @@
 Execute a checked TypeScript program against Ultra capabilities through one
 pinned Fabric registry view.
 
-Use this tool to compose dependent or parallel operations in one program. Set
+Prefer this tool for complex coding work involving multiple calls, repository
+investigation, parallel reads/searches, multi-file changes, or staged changes
+and verification. Use a direct native tool for one genuinely trivial operation;
+switch to Fabric as soon as the task needs discovery or more than one call. Set
 `display.title` to a short, concrete activity label so Ultra can show what the
 execution is doing while it runs. Every nested call still passes through
 Ultra's session permission policy, authoritative JSON Schema validation,

@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -60,12 +59,11 @@ func NewFabricExecTool(executor FabricExecutor, hostID, cwd string) fantasy.Agen
 				AgentBudget:      params.AgentBudget,
 				CapabilityViewID: params.CapabilityViewID,
 				ResultMaxBytes:   params.ResultMaxBytes,
-				DisplayTitle:     params.Display.Title, DisplayCompact: params.Display.Compact,
 			}, fabric.OuterInvocationContext{
 				ExecutionID: call.ID, ParentToolCallID: call.ID,
 				SessionID: GetSessionFromContext(ctx), CWD: cwd, HostID: hostID,
 			})
-			encoded, err := json.Marshal(result)
+			encoded, err := fabric.MarshalExecResult(result, params.ResultMaxBytes)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("marshal Fabric result: %w", err)
 			}
@@ -88,8 +86,11 @@ func validateFabricExecParams(params FabricExecParams) error {
 	if params.AgentBudget < 0 || params.AgentBudget > fabric.MaxAgentBudget {
 		return fmt.Errorf("fabric agent_budget must be between 0 and %d", fabric.MaxAgentBudget)
 	}
-	if params.ResultMaxBytes < 0 || params.ResultMaxBytes > fabric.DefaultJSONLimits().MaxBytes {
-		return fmt.Errorf("fabric result_max_bytes must be between 0 and %d", fabric.DefaultJSONLimits().MaxBytes)
+	if params.ResultMaxBytes != 0 && params.ResultMaxBytes < fabric.MinResultBytes {
+		return fmt.Errorf("fabric result_max_bytes must be 0 or at least %d", fabric.MinResultBytes)
+	}
+	if params.ResultMaxBytes > fabric.MaxResultBytes {
+		return fmt.Errorf("fabric result_max_bytes must not exceed %d", fabric.MaxResultBytes)
 	}
 	return nil
 }

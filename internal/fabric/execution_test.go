@@ -3,6 +3,7 @@ package fabric
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,7 +107,7 @@ func TestFabricExecReturnsBoundedJSON(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
-	value := JSONValue(strings.Repeat("x", 128))
+	value := JSONValue(strings.Repeat("x", MinResultBytes+1))
 	service := &ExecutionService{
 		Registry: registry,
 		Compiler: compilerFunc(func(_ context.Context, request CompileRequest) (CompileResult, error) {
@@ -125,7 +126,7 @@ func TestFabricExecReturnsBoundedJSON(t *testing.T) {
 	}
 	result := service.Execute(t.Context(), FabricExecRequest{
 		Code:           "return value",
-		ResultMaxBytes: 32,
+		ResultMaxBytes: MinResultBytes,
 	}, outer)
 	require.Equal(t, OutcomeFailed, result.Outcome)
 	require.Nil(t, result.Value)
@@ -136,7 +137,7 @@ func TestFabricExecReturnsBoundedJSON(t *testing.T) {
 	value = JSONObject{"ok": true}
 	result = service.Execute(t.Context(), FabricExecRequest{
 		Code:           "return value",
-		ResultMaxBytes: 32,
+		ResultMaxBytes: MinResultBytes,
 	}, outer)
 	require.Equal(t, OutcomeSucceeded, result.Outcome)
 	require.Equal(t, JSONObject{"ok": true}, result.Value)
@@ -144,6 +145,55 @@ func TestFabricExecReturnsBoundedJSON(t *testing.T) {
 	encoded, err := json.Marshal(result)
 	require.NoError(t, err)
 	require.True(t, json.Valid(encoded))
+}
+
+func TestFabricExecResultWholeEnvelopeLimit(t *testing.T) {
+	t.Parallel()
+	large := strings.Repeat("sensitive", 1024)
+	result := FabricExecResult{
+		ExecutionID: "execution-bounded", Outcome: OutcomeSucceeded,
+		Value: large, Logs: []string{large},
+		Diagnostics: []ProgramDiagnostic{{Category: "type", Message: large}},
+		Trace: ExecutionTrace{
+			Kind: "ultra.fabric.execution", Version: 1, Outcome: OutcomeSucceeded,
+			Operations: []TraceOperation{{Type: "call", Sequence: 1, Ref: "host.view", Error: large}},
+		},
+	}
+	encoded, err := MarshalExecResult(result, MinResultBytes)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(encoded), MinResultBytes)
+	require.True(t, json.Valid(encoded))
+	var bounded FabricExecResult
+	require.NoError(t, json.Unmarshal(encoded, &bounded))
+	require.Equal(t, OutcomeFailed, bounded.Outcome)
+	require.Nil(t, bounded.Value)
+	require.Empty(t, bounded.Logs)
+	require.Empty(t, bounded.Diagnostics)
+	require.Empty(t, bounded.Trace.Operations)
+	require.Positive(t, bounded.Trace.Counts.DroppedValues)
+	require.Positive(t, bounded.Trace.Counts.DroppedOperations)
+}
+
+func TestFabricContractFieldsAreEffective(t *testing.T) {
+	t.Parallel()
+	requestType := reflect.TypeFor[FabricExecRequest]()
+	for _, removed := range []string{"TokenBudget", "IdempotencyKey", "DisplayTitle", "DisplayCompact"} {
+		_, found := requestType.FieldByName(removed)
+		require.False(t, found, removed)
+	}
+
+	var got ExecutionActivity
+	service := &ExecutionService{Activity: func(activity ExecutionActivity) { got = activity }}
+	bridge := &executionBridge{service: service, outer: OuterInvocationContext{
+		ExecutionID: "execution", ParentToolCallID: "outer", SessionID: "session",
+	}}
+	require.NoError(t, bridge.Progress(ActivityUpdate{
+		Kind: "status", Message: "indexing", Data: JSONObject{"files": float64(3)},
+	}))
+	require.Equal(t, ActivityProgress, got.Kind)
+	require.Equal(t, "execution", got.ExecutionID)
+	require.Equal(t, "indexing", got.Message)
+	require.Equal(t, float64(3), got.Data["files"])
 }
 
 func TestFabricExecPublishesLivePhaseAndCallActivity(t *testing.T) {

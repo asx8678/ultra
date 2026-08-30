@@ -28,7 +28,10 @@ type UltraFabricProvider struct {
 	hookRunner  *hooks.Runner
 }
 
-const ultraFabricHookStateKey = "ultra.fabric.hook"
+const (
+	ultraFabricHookStateKey       = "ultra.fabric.hook"
+	ultraFabricPermissionStateKey = "ultra.fabric.permission"
+)
 
 // NewUltraFabricProvider snapshots executable tools and their schemas.
 func NewUltraFabricProvider(agentTools []fantasy.AgentTool) (*UltraFabricProvider, error) {
@@ -162,6 +165,12 @@ func (p *UltraFabricProvider) Invoke(
 	}
 	ctx = context.WithValue(ctx, SessionIDContextKey, invocation.SessionID)
 	ctx = context.WithValue(ctx, MessageIDContextKey, invocation.ExecutionID)
+	if p.hookRunner != nil {
+		ctx = WithFabricHookPrepared(ctx)
+	}
+	if approved, ok := invocation.State(ultraFabricPermissionStateKey); ok && approved == true {
+		ctx = permission.WithHookApproval(ctx, invocation.NestedToolCallID)
+	}
 	var hookResult hooks.AggregateResult
 	if state, ok := invocation.State(ultraFabricHookStateKey); ok {
 		hookResult, _ = state.(hooks.AggregateResult)
@@ -203,7 +212,7 @@ func (p *UltraFabricProvider) Invoke(
 type UltraFabricAuthorizer struct{ Permissions permission.Service }
 
 func (a UltraFabricAuthorizer) Authorize(
-	_ context.Context,
+	ctx context.Context,
 	request fabric.AuthorizationRequest,
 ) (fabric.AuthorizationDecision, error) {
 	if a.Permissions == nil {
@@ -212,13 +221,27 @@ func (a UltraFabricAuthorizer) Authorize(
 	action := strings.TrimPrefix(request.Ref, ultraFabricProviderName+".")
 	_, known := toolmeta.Lookup(action)
 	mode, scoped := permission.SessionMode(a.Permissions, request.Context.SessionID)
-	if !scoped || mode == permission.ModeAsk || mode == permission.ModeYolo {
-		// Native and MCP tools still enforce their own operation-specific
-		// permission requests at invocation time.
+
+	// Built-ins keep their native operation-specific permission flow for
+	// interactive sessions. Dynamic tools (notably MCP tools) lack static
+	// metadata, so Fabric must perform a per-call permission request.
+	if known && (!scoped || mode == permission.ModeAsk || mode == permission.ModeYolo) {
 		return fabric.AuthorizationDecision{Allowed: true}, nil
 	}
 	if !known {
-		return fabric.AuthorizationDecision{Reason: "tool has no authoritative Ultra metadata"}, nil
+		allowed, err := a.Permissions.Request(ctx, permission.CreatePermissionRequest{
+			SessionID: request.Context.SessionID, ToolCallID: request.Context.NestedToolCallID,
+			ToolName: action, Description: request.Descriptor.Description,
+			Action: request.Ref, Params: request.Args, Path: request.Context.CWD,
+		})
+		if err != nil {
+			return fabric.AuthorizationDecision{Reason: err.Error()}, nil
+		}
+		if allowed {
+			request.Context.SetState(ultraFabricPermissionStateKey, true)
+			return fabric.AuthorizationDecision{Allowed: true}, nil
+		}
+		return fabric.AuthorizationDecision{Reason: "dynamic tool permission denied"}, nil
 	}
 	if permission.ToolAllowed(mode, action) {
 		return fabric.AuthorizationDecision{Allowed: true}, nil
