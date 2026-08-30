@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -98,9 +99,11 @@ func TestConfigStoreSaveCustomProviderNormalizesAndPreservesKey(t *testing.T) {
 	provider := persisted.Providers[draft.ID]
 	require.Equal(t, "secret-value", provider.APIKey)
 	require.Equal(t, "MoonMath Updated", provider.Name)
-	info, err := os.Stat(store.globalDataPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(store.globalDataPath)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }
 
 func TestConfigStoreRejectsBuiltInIDCollision(t *testing.T) {
