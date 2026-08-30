@@ -95,6 +95,25 @@ func TestSendMessage_HeadlessLegacyClientDefaultsReadOnly(t *testing.T) {
 	close(coord.release)
 }
 
+func TestSendMessage_ExplicitYoloIsSessionScoped(t *testing.T) {
+	t.Parallel()
+	b, _ := newTestBackend(t)
+	coord := newBlockingCoordinator()
+	ws := insertAgentWorkspace(t, b, coord)
+	ws.Permissions = permission.NewPermissionService(ws.Path, false, nil)
+
+	require.NoError(t, b.SendMessage(ws.ID, proto.AgentMessage{
+		SessionID:      "S1",
+		Prompt:         "hi",
+		PermissionMode: string(permission.ModeYolo),
+	}))
+	mode, ok := permission.SessionMode(ws.Permissions, "S1")
+	require.True(t, ok)
+	require.Equal(t, permission.ModeYolo, mode)
+	require.False(t, ws.Permissions.SkipRequests(), "per-run yolo must not mutate workspace-global permission state")
+	close(coord.release)
+}
+
 func TestSendMessage_WorkspaceNotFound(t *testing.T) {
 	t.Parallel()
 	b, _ := newTestBackend(t)

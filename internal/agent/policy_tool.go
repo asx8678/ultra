@@ -7,7 +7,6 @@ import (
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent/tools"
 	"github.com/asx8678/ultra/internal/permission"
-	"github.com/asx8678/ultra/internal/toolmeta"
 )
 
 type policyTool struct {
@@ -42,12 +41,7 @@ func (t *policyTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		return t.inner.Run(ctx, call)
 	}
 
-	metadata, known := toolmeta.Lookup(call.Name)
-	allowed := known && metadata.Effects == toolmeta.EffectRead
-	if mode == permission.ModeAcceptEdits {
-		allowed = known && metadata.Effects&(toolmeta.EffectExec|toolmeta.EffectNetwork) == 0
-	}
-	if allowed {
+	if permission.ToolAllowed(mode, call.Name) {
 		return t.inner.Run(ctx, call)
 	}
 

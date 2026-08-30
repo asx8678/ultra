@@ -17,12 +17,17 @@ func TestSessionModes(t *testing.T) {
 		granted bool
 		err     error
 	}{
+		{name: "read only grants view", mode: ModeReadOnly, tool: "view", granted: true},
 		{name: "read only denies write", mode: ModeReadOnly, tool: "write"},
+		{name: "read only denies network read", mode: ModeReadOnly, tool: "fetch"},
 		{name: "read only denies shell", mode: ModeReadOnly, tool: "bash"},
+		{name: "read only denies unknown", mode: ModeReadOnly, tool: "plugin_tool"},
 		{name: "accept edits grants write", mode: ModeAcceptEdits, tool: "write", granted: true},
 		{name: "accept edits grants lsp rename", mode: ModeAcceptEdits, tool: "lsp_rename", granted: true},
+		{name: "accept edits grants session write", mode: ModeAcceptEdits, tool: "todos", granted: true},
 		{name: "accept edits denies shell", mode: ModeAcceptEdits, tool: "bash"},
-		{name: "yolo grants shell", mode: ModeYolo, tool: "bash", granted: true},
+		{name: "accept edits denies network", mode: ModeAcceptEdits, tool: "fetch"},
+		{name: "yolo grants unknown", mode: ModeYolo, tool: "plugin_tool", granted: true},
 		{name: "ask fails without frontend", mode: ModeAsk, tool: "bash", err: ErrApprovalRequired},
 	}
 

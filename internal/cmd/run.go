@@ -113,9 +113,6 @@ ultra run --continue "Follow up on your last response"
 			}
 
 			clientWs := workspace.NewClientWorkspace(c, *ws)
-			if mode == permission.ModeYolo {
-				clientWs.PermissionSetSkipRequests(true)
-			}
 			if err := clientWs.InitCoderAgentNonInteractive(ctx); err != nil {
 				return fmt.Errorf("failed to initialize agent: %w", err)
 			}

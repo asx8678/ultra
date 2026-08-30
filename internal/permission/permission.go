@@ -12,6 +12,7 @@ import (
 
 	"github.com/asx8678/ultra/internal/csync"
 	"github.com/asx8678/ultra/internal/pubsub"
+	"github.com/asx8678/ultra/internal/toolmeta"
 )
 
 // hookApprovalKey is the unexported context key used to mark a tool call as
@@ -233,7 +234,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		if mode == ModeAsk {
 			return false, ErrApprovalRequired
 		}
-		granted := mode == ModeYolo || mode == ModeAcceptEdits && isEditTool(opts.ToolName)
+		granted := ToolAllowed(mode, opts.ToolName)
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
 			ToolCallID: opts.ToolCallID,
 			Granted:    granted,
@@ -318,10 +319,21 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	}
 }
 
-func isEditTool(name string) bool {
-	switch name {
-	case "edit", "multiedit", "write", "lsp_rename", "lsp_replace_symbol":
+// ToolAllowed reports whether mode permits a built-in tool according to the
+// authoritative effect metadata. Unknown tools fail closed outside yolo mode.
+func ToolAllowed(mode Mode, name string) bool {
+	if mode == ModeYolo {
 		return true
+	}
+	metadata, known := toolmeta.Lookup(name)
+	if !known {
+		return false
+	}
+	switch mode {
+	case ModeReadOnly:
+		return metadata.Effects == toolmeta.EffectRead
+	case ModeAcceptEdits:
+		return metadata.Effects&(toolmeta.EffectExec|toolmeta.EffectNetwork) == 0
 	default:
 		return false
 	}
