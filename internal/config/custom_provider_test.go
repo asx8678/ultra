@@ -113,6 +113,14 @@ func TestConfigStoreRejectsBuiltInIDCollision(t *testing.T) {
 	require.ErrorIs(t, err, ErrCustomProviderIDConflict)
 	_, statErr := os.Stat(store.globalDataPath)
 	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	const existing = `{"providers":{"openai":{"api_key":"saved-key"}}}`
+	require.NoError(t, os.WriteFile(store.globalDataPath, []byte(existing), 0o600))
+	_, err = store.SaveCustomProvider(context.Background(), draft)
+	require.ErrorIs(t, err, ErrCustomProviderIDConflict)
+	persisted, err := os.ReadFile(store.globalDataPath)
+	require.NoError(t, err)
+	require.JSONEq(t, existing, string(persisted))
 }
 
 func TestConfigStoreListCustomProvidersRedactsSecrets(t *testing.T) {

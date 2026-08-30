@@ -409,12 +409,7 @@ func (s *ConfigStore) SaveCustomProvider(ctx context.Context, draft CustomProvid
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	raw, err := readRawProviders(s.globalDataPath)
-	if err != nil {
-		return CustomProviderSummary{}, err
-	}
-	_, managed := raw[normalized.ID]
-	if !managed && s.isKnownProviderID(normalized.ID) {
+	if s.isKnownProviderID(normalized.ID) {
 		return CustomProviderSummary{}, ErrCustomProviderIDConflict
 	}
 	var provider ProviderConfig
