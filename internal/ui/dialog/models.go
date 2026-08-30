@@ -85,6 +85,7 @@ type Models struct {
 		UpDown   key.Binding
 		Select   key.Binding
 		Edit     key.Binding
+		Manage   key.Binding
 		Next     key.Binding
 		Previous key.Binding
 		Close    key.Binding
@@ -128,6 +129,10 @@ func NewModels(com *common.Common, isOnboarding bool) (*Models, error) {
 	m.keyMap.Edit = key.NewBinding(
 		key.WithKeys("ctrl+e"),
 		key.WithHelp("ctrl+e", "edit"),
+	)
+	m.keyMap.Manage = key.NewBinding(
+		key.WithKeys("ctrl+o"),
+		key.WithHelp("ctrl+o", "manage providers"),
 	)
 	m.keyMap.UpDown = key.NewBinding(
 		key.WithKeys("up", "down"),
@@ -173,6 +178,8 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 		switch {
 		case key.Matches(msg, m.keyMap.Close):
 			return ActionClose{}
+		case key.Matches(msg, m.keyMap.Manage):
+			return ActionManageProviders{ReturnToModels: true}
 		case key.Matches(msg, m.keyMap.Previous):
 			m.list.Focus()
 			if m.list.IsSelectedFirst() {
@@ -312,6 +319,7 @@ func (m *Models) ShortHelp() []key.Binding {
 		return []key.Binding{
 			m.keyMap.UpDown,
 			m.keyMap.Select,
+			m.keyMap.Manage,
 		}
 	}
 	h := []key.Binding{
@@ -322,7 +330,7 @@ func (m *Models) ShortHelp() []key.Binding {
 	if m.isSelectedConfigured() {
 		h = append(h, m.keyMap.Edit)
 	}
-	h = append(h, m.keyMap.Close)
+	h = append(h, m.keyMap.Manage, m.keyMap.Close)
 	return h
 }
 

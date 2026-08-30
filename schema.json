@@ -637,7 +637,7 @@
             "omlx"
           ],
           "description": "Provider type that determines the API format",
-          "default": "openai"
+          "default": "openai-compat"
         },
         "api_key": {
           "type": "string",

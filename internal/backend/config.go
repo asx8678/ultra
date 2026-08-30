@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/agent"
 	mcptools "github.com/asx8678/ultra/internal/agent/tools/mcp"
 	"github.com/asx8678/ultra/internal/commands"
@@ -44,6 +45,65 @@ type MCPResourceContents struct {
 	MIMEType string `json:"mime_type,omitempty"`
 	Text     string `json:"text,omitempty"`
 	Blob     []byte `json:"blob,omitempty"`
+}
+
+// ListCustomProviders returns the redacted provider-management listing.
+func (b *Backend) ListCustomProviders(ctx context.Context, workspaceID string) ([]config.CustomProviderSummary, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return ws.Cfg.ListCustomProviders(ctx)
+}
+
+// DiscoverCustomProviderModels tests a provider and returns its models without
+// mutating configuration.
+func (b *Backend) DiscoverCustomProviderModels(ctx context.Context, workspaceID string, draft config.CustomProviderDraft) ([]catwalk.Model, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return ws.Cfg.DiscoverCustomProviderModels(ctx, draft)
+}
+
+// SaveCustomProvider persists and activates a managed custom provider.
+func (b *Backend) SaveCustomProvider(ctx context.Context, workspaceID string, draft config.CustomProviderDraft) (config.CustomProviderSummary, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return config.CustomProviderSummary{}, err
+	}
+	provider, err := ws.Cfg.SaveCustomProvider(ctx, draft)
+	if err != nil {
+		return config.CustomProviderSummary{}, err
+	}
+	if ws.AgentCoordinator == nil {
+		if err := ws.InitCoderAgent(ctx); err != nil {
+			return config.CustomProviderSummary{}, err
+		}
+	} else if err := ws.UpdateAgentModel(ctx); err != nil {
+		return config.CustomProviderSummary{}, err
+	}
+	publishConfigChanged(ws)
+	return provider, nil
+}
+
+// DeleteCustomProvider removes a managed provider and activates the fallback
+// model selection produced by configuration reload.
+func (b *Backend) DeleteCustomProvider(ctx context.Context, workspaceID, providerID string) error {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := ws.Cfg.DeleteCustomProvider(ctx, providerID); err != nil {
+		return err
+	}
+	if ws.AgentCoordinator != nil {
+		if err := ws.UpdateAgentModel(ctx); err != nil {
+			return err
+		}
+	}
+	publishConfigChanged(ws)
+	return nil
 }
 
 // SetConfigField sets a key/value pair in the config file for the

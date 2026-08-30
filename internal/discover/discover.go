@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,7 +18,21 @@ import (
 // httpClient is shared across all discovery and enrichment calls. It
 // has a reasonable timeout so individual requests cannot block forever
 // even if the caller forgets to set a context deadline.
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+const maxDiscoveryResponseSize = 2 << 20
+
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return errors.New("too many provider redirects")
+		}
+		previous := via[len(via)-1].URL
+		if !strings.EqualFold(req.URL.Scheme, previous.Scheme) || !strings.EqualFold(req.URL.Host, previous.Host) {
+			return errors.New("provider redirect changed origin")
+		}
+		return nil
+	},
+}
 
 // stripV1Suffix removes a trailing /v1 from a base URL. Enricher
 // endpoints (e.g. Ollama's /api/show, LM Studio's /api/v1/models) are
@@ -35,7 +52,10 @@ func doRequest(ctx context.Context, method, baseURL, path, apiKey string, extraH
 	resolvedBase, _ := resolver.ResolveValue(baseURL)
 	resolvedKey, _ := resolver.ResolveValue(apiKey)
 
-	url := strings.TrimRight(resolvedBase, "/") + "/" + strings.TrimLeft(path, "/")
+	requestURL, err := url.JoinPath(strings.TrimRight(resolvedBase, "/"), strings.TrimLeft(path, "/"))
+	if err != nil {
+		return nil, fmt.Errorf("joining provider URL: %w", err)
+	}
 
 	var reqBody *bytes.Reader
 	if body != nil {
@@ -47,11 +67,10 @@ func doRequest(ctx context.Context, method, baseURL, path, apiKey string, extraH
 	}
 
 	var req *http.Request
-	var err error
 	if reqBody != nil {
-		req, err = http.NewRequestWithContext(ctx, method, url, reqBody)
+		req, err = http.NewRequestWithContext(ctx, method, requestURL, reqBody)
 	} else {
-		req, err = http.NewRequestWithContext(ctx, method, url, nil)
+		req, err = http.NewRequestWithContext(ctx, method, requestURL, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -115,8 +134,15 @@ func DiscoverModels(ctx context.Context, cfg Config, resolver Resolver) ([]catwa
 		return nil, fmt.Errorf("discover models for provider %s: %s", cfg.ID, resp.Status)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDiscoveryResponseSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("discover models for provider %s: %w", cfg.ID, err)
+	}
+	if len(body) > maxDiscoveryResponseSize {
+		return nil, fmt.Errorf("discover models for provider %s: response exceeds %d bytes", cfg.ID, maxDiscoveryResponseSize)
+	}
 	var modelsResp modelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
+	if err := json.Unmarshal(body, &modelsResp); err != nil {
 		return nil, fmt.Errorf("discover models for provider %s: %w", cfg.ID, err)
 	}
 

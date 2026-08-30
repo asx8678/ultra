@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/oauth"
 )
@@ -19,6 +20,32 @@ type ConfigSetRequest struct {
 type ConfigRemoveRequest struct {
 	Scope config.Scope `json:"scope"`
 	Key   string       `json:"key"`
+}
+
+// CustomProviderRequest carries a complete custom-provider draft for
+// discovery or persistence.
+type CustomProviderRequest struct {
+	Provider config.CustomProviderDraft `json:"provider"`
+}
+
+// CustomProviderDeleteRequest identifies a managed custom provider.
+type CustomProviderDeleteRequest struct {
+	ProviderID string `json:"provider_id"`
+}
+
+// CustomProvidersResponse is the redacted provider-management listing.
+type CustomProvidersResponse struct {
+	Providers []config.CustomProviderSummary `json:"providers"`
+}
+
+// CustomProviderResponse returns one redacted provider after saving it.
+type CustomProviderResponse struct {
+	Provider config.CustomProviderSummary `json:"provider"`
+}
+
+// CustomProviderModelsResponse returns models discovered by the server.
+type CustomProviderModelsResponse struct {
+	Models []catwalk.Model `json:"models"`
 }
 
 // ConfigModelRequest represents a request to update the preferred model.

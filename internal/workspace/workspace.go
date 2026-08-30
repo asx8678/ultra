@@ -202,6 +202,10 @@ type Workspace interface {
 	Resolver() config.VariableResolver
 
 	// Config mutations (proxied to server in client mode)
+	ListCustomProviders(ctx context.Context) ([]config.CustomProviderSummary, error)
+	DiscoverCustomProviderModels(ctx context.Context, draft config.CustomProviderDraft) ([]catwalk.Model, error)
+	SaveCustomProvider(ctx context.Context, draft config.CustomProviderDraft) (config.CustomProviderSummary, error)
+	DeleteCustomProvider(ctx context.Context, providerID string) error
 	UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error
 	SetCompactMode(scope config.Scope, enabled bool) error
 	SetProviderAPIKey(scope config.Scope, providerID string, apiKey any) error

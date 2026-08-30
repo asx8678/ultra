@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/agent"
 	mcptools "github.com/asx8678/ultra/internal/agent/tools/mcp"
 	"github.com/asx8678/ultra/internal/app"
@@ -336,6 +337,39 @@ func (w *AppWorkspace) Resolver() config.VariableResolver {
 }
 
 // -- Config mutations --
+
+func (w *AppWorkspace) ListCustomProviders(ctx context.Context) ([]config.CustomProviderSummary, error) {
+	return w.store.ListCustomProviders(ctx)
+}
+
+func (w *AppWorkspace) DiscoverCustomProviderModels(ctx context.Context, draft config.CustomProviderDraft) ([]catwalk.Model, error) {
+	return w.store.DiscoverCustomProviderModels(ctx, draft)
+}
+
+func (w *AppWorkspace) SaveCustomProvider(ctx context.Context, draft config.CustomProviderDraft) (config.CustomProviderSummary, error) {
+	provider, err := w.store.SaveCustomProvider(ctx, draft)
+	if err != nil {
+		return config.CustomProviderSummary{}, err
+	}
+	if w.app.AgentCoordinator == nil {
+		if err := w.app.InitCoderAgent(ctx); err != nil {
+			return config.CustomProviderSummary{}, err
+		}
+	} else if err := w.app.UpdateAgentModel(ctx); err != nil {
+		return config.CustomProviderSummary{}, err
+	}
+	return provider, nil
+}
+
+func (w *AppWorkspace) DeleteCustomProvider(ctx context.Context, providerID string) error {
+	if err := w.store.DeleteCustomProvider(ctx, providerID); err != nil {
+		return err
+	}
+	if w.app.AgentCoordinator != nil {
+		return w.app.UpdateAgentModel(ctx)
+	}
+	return nil
+}
 
 func (w *AppWorkspace) UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error {
 	return w.store.UpdatePreferredModel(scope, modelType, model)

@@ -1906,6 +1906,19 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		if cmd := m.openDialog(msg.DialogID); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.ActionManageProviders:
+		m.dialog.CloseDialog(dialog.CommandsID)
+		if cmd := m.openProvidersDialog(msg.ReturnToModels); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case dialog.ActionCloseProviders:
+		m.dialog.CloseDialog(dialog.ProvidersID)
+		if msg.ReturnToModels {
+			m.dialog.CloseDialog(dialog.ModelsID)
+			if cmd := m.openModelsDialog(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 
 	// Command dialog messages.
 	case dialog.ActionToggleYoloMode:
@@ -4438,6 +4451,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openModelsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.ProvidersID:
+		if cmd := m.openProvidersDialog(false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.CommandsID:
 		if cmd := m.openCommandsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -4476,6 +4493,20 @@ func (m *UI) openQuitDialog() tea.Cmd {
 	quitDialog := dialog.NewQuit(m.com)
 	m.dialog.OpenDialog(quitDialog)
 	return nil
+}
+
+// openProvidersDialog opens the custom-provider manager.
+func (m *UI) openProvidersDialog(returnToModels bool) tea.Cmd {
+	if m.isAgentBusy() {
+		return util.ReportWarn("Agent is busy, please wait before managing providers...")
+	}
+	if m.dialog.ContainsDialog(dialog.ProvidersID) {
+		m.dialog.BringToFront(dialog.ProvidersID)
+		return nil
+	}
+	providersDialog, cmd := dialog.NewProviders(m.com, returnToModels)
+	m.dialog.OpenDialog(providersDialog)
+	return cmd
 }
 
 // openModelsDialog opens the models dialog.

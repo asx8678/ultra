@@ -6,10 +6,75 @@ import (
 	"fmt"
 	"net/http"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/oauth"
 	"github.com/asx8678/ultra/internal/proto"
 )
+
+// ListCustomProviders returns the server-side redacted provider listing.
+func (c *Client) ListCustomProviders(ctx context.Context, id string) ([]config.CustomProviderSummary, error) {
+	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/config/custom-providers", id), nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list custom providers: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return nil, fmt.Errorf("failed to list custom providers: %w", err)
+	}
+	var result proto.CustomProvidersResponse
+	if err := json.NewDecoder(rsp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode custom providers: %w", err)
+	}
+	return result.Providers, nil
+}
+
+// DiscoverCustomProviderModels tests a draft from the server workspace.
+func (c *Client) DiscoverCustomProviderModels(ctx context.Context, id string, draft config.CustomProviderDraft) ([]catwalk.Model, error) {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/config/custom-providers/discover", id), nil, jsonBody(proto.CustomProviderRequest{Provider: draft}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover provider models: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return nil, fmt.Errorf("failed to discover provider models: %w", err)
+	}
+	var result proto.CustomProviderModelsResponse
+	if err := json.NewDecoder(rsp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode provider models: %w", err)
+	}
+	return result.Models, nil
+}
+
+// SaveCustomProvider persists a complete custom provider on the server.
+func (c *Client) SaveCustomProvider(ctx context.Context, id string, draft config.CustomProviderDraft) (config.CustomProviderSummary, error) {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/config/custom-providers/save", id), nil, jsonBody(proto.CustomProviderRequest{Provider: draft}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return config.CustomProviderSummary{}, fmt.Errorf("failed to save custom provider: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return config.CustomProviderSummary{}, fmt.Errorf("failed to save custom provider: %w", err)
+	}
+	var result proto.CustomProviderResponse
+	if err := json.NewDecoder(rsp.Body).Decode(&result); err != nil {
+		return config.CustomProviderSummary{}, fmt.Errorf("failed to decode custom provider: %w", err)
+	}
+	return result.Provider, nil
+}
+
+// DeleteCustomProvider removes a managed provider on the server.
+func (c *Client) DeleteCustomProvider(ctx context.Context, id, providerID string) error {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/config/custom-providers/delete", id), nil, jsonBody(proto.CustomProviderDeleteRequest{ProviderID: providerID}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return fmt.Errorf("failed to delete custom provider: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return fmt.Errorf("failed to delete custom provider: %w", err)
+	}
+	return nil
+}
 
 // SetConfigField sets a config key/value pair on the server.
 func (c *Client) SetConfigField(ctx context.Context, id string, scope config.Scope, key string, value any) error {

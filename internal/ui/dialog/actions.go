@@ -31,6 +31,18 @@ type ActionOpenDialog struct {
 	DialogID string
 }
 
+// ActionManageProviders opens provider management. ReturnToModels requests a
+// refreshed model picker when the manager closes.
+type ActionManageProviders struct {
+	ReturnToModels bool
+}
+
+// ActionCloseProviders closes provider management and optionally reopens the
+// model picker from a fresh configuration snapshot.
+type ActionCloseProviders struct {
+	ReturnToModels bool
+}
+
 // ActionSelectSession is a message indicating a session has been selected.
 type ActionSelectSession struct {
 	Session session.Session

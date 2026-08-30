@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -199,6 +201,37 @@ func TestDiscoverModels_NoAuthWhenNoAPIKey(t *testing.T) {
 	models, err := DiscoverModels(context.Background(), cfg, &mockResolver{})
 	require.NoError(t, err)
 	require.Len(t, models, 1)
+}
+
+func TestDiscoverModelsRejectsCrossOriginRedirect(t *testing.T) {
+	t.Parallel()
+	var reached atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("credential reached redirect target")
+		}
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/models", http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	_, err := DiscoverModels(context.Background(), Config{ID: "redirect", BaseURL: source.URL, APIKey: "secret"}, &mockResolver{})
+	require.ErrorContains(t, err, "redirect changed origin")
+	require.False(t, reached.Load())
+}
+
+func TestDiscoverModelsRejectsOversizedResponse(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[]}` + strings.Repeat(" ", maxDiscoveryResponseSize)))
+	}))
+	defer server.Close()
+
+	_, err := DiscoverModels(context.Background(), Config{ID: "large", BaseURL: server.URL}, &mockResolver{})
+	require.ErrorContains(t, err, "response exceeds")
 }
 
 func TestStripV1Suffix(t *testing.T) {

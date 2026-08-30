@@ -54,6 +54,11 @@ type APIKeyInput struct {
 
 var _ Dialog = (*APIKeyInput)(nil)
 
+func maskTextInput(input *textinput.Model) {
+	input.EchoMode = textinput.EchoPassword
+	input.EchoCharacter = '•'
+}
+
 // NewAPIKeyInput creates a new Models dialog.
 func NewAPIKeyInput(
 	com *common.Common,
@@ -74,8 +79,7 @@ func NewAPIKeyInput(
 
 	m.input = textinput.New()
 	m.input.SetVirtualCursor(false)
-	m.input.EchoMode = textinput.EchoPassword
-	m.input.EchoCharacter = '•'
+	maskTextInput(&m.input)
 	m.input.Placeholder = "Enter your API key..."
 	m.input.SetStyles(com.Styles.TextInput)
 	m.input.Focus()
@@ -286,13 +290,17 @@ func (m *APIKeyInput) ShortHelp() []key.Binding {
 func (m *APIKeyInput) verifyAPIKey() tea.Msg {
 	start := time.Now()
 
-	providerConfig := config.ProviderConfig{
-		ID:      string(m.provider.ID),
-		Name:    m.provider.Name,
-		APIKey:  m.input.Value(),
-		Type:    m.provider.Type,
-		BaseURL: m.provider.APIEndpoint,
+	providerID := string(m.provider.ID)
+	providerConfig, ok := m.com.Config().Providers.Get(providerID)
+	if !ok {
+		providerConfig = config.ProviderConfig{
+			ID:      providerID,
+			Name:    m.provider.Name,
+			Type:    m.provider.Type,
+			BaseURL: m.provider.APIEndpoint,
+		}
 	}
+	providerConfig.APIKey = m.input.Value()
 	err := providerConfig.TestConnection(m.com.Workspace.Resolver())
 
 	// intentionally wait for at least 750ms to make sure the user sees the spinner

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/agent/notify"
 	"github.com/asx8678/ultra/internal/agent/tools/mcp"
 	"github.com/asx8678/ultra/internal/client"
@@ -521,6 +522,30 @@ func (w *ClientWorkspace) Resolver() config.VariableResolver {
 }
 
 // -- Config mutations --
+
+func (w *ClientWorkspace) ListCustomProviders(ctx context.Context) ([]config.CustomProviderSummary, error) {
+	return w.client.ListCustomProviders(ctx, w.workspaceID())
+}
+
+func (w *ClientWorkspace) DiscoverCustomProviderModels(ctx context.Context, draft config.CustomProviderDraft) ([]catwalk.Model, error) {
+	return w.client.DiscoverCustomProviderModels(ctx, w.workspaceID(), draft)
+}
+
+func (w *ClientWorkspace) SaveCustomProvider(ctx context.Context, draft config.CustomProviderDraft) (config.CustomProviderSummary, error) {
+	provider, err := w.client.SaveCustomProvider(ctx, w.workspaceID(), draft)
+	if err == nil {
+		w.refreshWorkspace()
+	}
+	return provider, err
+}
+
+func (w *ClientWorkspace) DeleteCustomProvider(ctx context.Context, providerID string) error {
+	err := w.client.DeleteCustomProvider(ctx, w.workspaceID(), providerID)
+	if err == nil {
+		w.refreshWorkspace()
+	}
+	return err
+}
 
 func (w *ClientWorkspace) UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error {
 	err := w.client.UpdatePreferredModel(context.Background(), w.workspaceID(), scope, modelType, model)

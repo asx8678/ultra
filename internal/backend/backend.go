@@ -1067,7 +1067,7 @@ func validateClientID(id string) (string, error) {
 }
 
 func workspaceToProto(ws *Workspace) proto.Workspace {
-	cfg := ws.Cfg.Config()
+	cfg := ws.Cfg.Config().RedactCustomProviderSecrets(ws.Cfg.KnownProviders())
 	out := proto.Workspace{
 		ID:       ws.ID,
 		Path:     ws.Path,

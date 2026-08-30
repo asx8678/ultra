@@ -2,10 +2,91 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/proto"
 )
+
+const customProviderRequestLimit = 64 << 10
+
+// handleGetWorkspaceCustomProviders returns a redacted provider-management listing.
+func (c *controllerV1) handleGetWorkspaceCustomProviders(w http.ResponseWriter, r *http.Request) {
+	providers, err := c.backend.ListCustomProviders(r.Context(), r.PathValue("id"))
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.CustomProvidersResponse{Providers: providers})
+}
+
+// handlePostWorkspaceCustomProviderDiscover tests a draft and returns models.
+func (c *controllerV1) handlePostWorkspaceCustomProviderDiscover(w http.ResponseWriter, r *http.Request) {
+	var req proto.CustomProviderRequest
+	if !decodeCustomProviderRequest(w, r, &req) {
+		return
+	}
+	models, err := c.backend.DiscoverCustomProviderModels(r.Context(), r.PathValue("id"), req.Provider)
+	if err != nil {
+		c.handleCustomProviderError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.CustomProviderModelsResponse{Models: models})
+}
+
+// handlePostWorkspaceCustomProviderSave validates, persists, and activates a provider.
+func (c *controllerV1) handlePostWorkspaceCustomProviderSave(w http.ResponseWriter, r *http.Request) {
+	var req proto.CustomProviderRequest
+	if !decodeCustomProviderRequest(w, r, &req) {
+		return
+	}
+	provider, err := c.backend.SaveCustomProvider(r.Context(), r.PathValue("id"), req.Provider)
+	if err != nil {
+		c.handleCustomProviderError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.CustomProviderResponse{Provider: provider})
+}
+
+// handlePostWorkspaceCustomProviderDelete removes a managed provider.
+func (c *controllerV1) handlePostWorkspaceCustomProviderDelete(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, customProviderRequestLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var req proto.CustomProviderDeleteRequest
+	if err := decoder.Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+	if err := c.backend.DeleteCustomProvider(r.Context(), r.PathValue("id"), req.ProviderID); err != nil {
+		c.handleCustomProviderError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func decodeCustomProviderRequest(w http.ResponseWriter, r *http.Request, req *proto.CustomProviderRequest) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, customProviderRequestLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(req); err != nil {
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return false
+	}
+	return true
+}
+
+func (c *controllerV1) handleCustomProviderError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, config.ErrInvalidCustomProvider):
+		jsonError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, config.ErrCustomProviderNotManaged), errors.Is(err, config.ErrCustomProviderIDConflict):
+		jsonError(w, http.StatusConflict, err.Error())
+	default:
+		c.handleError(w, r, err)
+	}
+}
 
 // handlePostWorkspaceConfigSet sets a configuration field.
 //

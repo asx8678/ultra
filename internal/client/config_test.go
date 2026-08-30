@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"testing"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/oauth"
 	"github.com/asx8678/ultra/internal/proto"
@@ -98,6 +99,60 @@ func TestSetProviderAPIKeyNilOAuthFailsLocally(t *testing.T) {
 	var tok *oauth.Token
 	err := c.SetProviderAPIKey(context.Background(), "ws1", config.ScopeGlobal, "x", tok)
 	require.Error(t, err)
+}
+
+func TestCustomProviderClientRoutesAndRedaction(t *testing.T) {
+	t.Parallel()
+	key := "request-only-secret"
+	draft := config.CustomProviderDraft{
+		ID:      "custom",
+		Name:    "Custom",
+		Type:    catwalk.TypeOpenAICompat,
+		BaseURL: "https://example.com/v1",
+		APIKey:  &key,
+		Models:  []catwalk.Model{{ID: "model", Name: "Model"}},
+	}
+	summary := config.CustomProviderSummary{ID: "custom", Name: "Custom", Editable: true, APIKeyConfigured: true}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/workspaces/ws1/config/custom-providers":
+			require.Equal(t, http.MethodGet, r.Method)
+			require.NoError(t, json.NewEncoder(w).Encode(proto.CustomProvidersResponse{Providers: []config.CustomProviderSummary{summary}}))
+		case "/v1/workspaces/ws1/config/custom-providers/save":
+			var req proto.CustomProviderRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NotNil(t, req.Provider.APIKey)
+			require.Equal(t, key, *req.Provider.APIKey)
+			require.NoError(t, json.NewEncoder(w).Encode(proto.CustomProviderResponse{Provider: summary}))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := captureClient(t, srv)
+	providers, err := client.ListCustomProviders(t.Context(), "ws1")
+	require.NoError(t, err)
+	require.Equal(t, []config.CustomProviderSummary{summary}, providers)
+	got, err := client.SaveCustomProvider(t.Context(), "ws1", draft)
+	require.NoError(t, err)
+	require.Equal(t, summary, got)
+	encoded, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), key)
+}
+
+func TestCustomProviderClientPreservesServerValidationError(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(proto.Error{Message: "provider ID must not contain dots"})
+	}))
+	defer srv.Close()
+
+	_, err := captureClient(t, srv).SaveCustomProvider(t.Context(), "ws1", config.CustomProviderDraft{})
+	require.ErrorContains(t, err, "provider ID must not contain dots")
 }
 
 func TestListMCPPrompts(t *testing.T) {

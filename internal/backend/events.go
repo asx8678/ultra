@@ -56,7 +56,7 @@ func (b *Backend) GetWorkspaceConfig(workspaceID string) (*config.Config, error)
 		return nil, err
 	}
 
-	return ws.Cfg.Config(), nil
+	return ws.Cfg.Config().RedactCustomProviderSecrets(ws.Cfg.KnownProviders()), nil
 }
 
 // GetWorkspaceProviders returns the configured providers for a

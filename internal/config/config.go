@@ -14,6 +14,7 @@ import (
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/asx8678/ultra/internal/csync"
+	"github.com/asx8678/ultra/internal/discover"
 	"github.com/asx8678/ultra/internal/oauth"
 	"github.com/asx8678/ultra/internal/oauth/copilot"
 	"github.com/invopop/jsonschema"
@@ -95,8 +96,8 @@ type ProviderConfig struct {
 	Name string `json:"name,omitempty" jsonschema:"description=Human-readable name for the provider,example=OpenAI"`
 	// The provider's API endpoint.
 	BaseURL string `json:"base_url,omitempty" jsonschema:"description=Base URL for the provider's API,format=uri,example=https://api.openai.com/v1"`
-	// The provider type, e.g. "openai", "anthropic", etc. if empty it defaults to openai.
-	Type catwalk.Type `json:"type,omitempty" jsonschema:"description=Provider type that determines the API format,default=openai"`
+	// The provider type, e.g. "openai", "anthropic", etc. If empty it defaults to openai-compat.
+	Type catwalk.Type `json:"type,omitempty" jsonschema:"description=Provider type that determines the API format,default=openai-compat"`
 	// The provider's API key.
 	APIKey string `json:"api_key,omitempty" jsonschema:"description=API key for authentication with the provider,example=$OPENAI_API_KEY"`
 	// The original API key template before resolution (for re-resolution on auth errors).
@@ -153,9 +154,11 @@ type ProviderConfig struct {
 func (c *ProviderConfig) ToProvider() catwalk.Provider {
 	// Convert config provider to provider.Provider format
 	provider := catwalk.Provider{
-		Name:   c.Name,
-		ID:     catwalk.InferenceProvider(c.ID),
-		Models: make([]catwalk.Model, len(c.Models)),
+		Name:        c.Name,
+		ID:          catwalk.InferenceProvider(c.ID),
+		Type:        c.Type,
+		APIEndpoint: c.BaseURL,
+		Models:      make([]catwalk.Model, len(c.Models)),
 	}
 
 	// Convert models
@@ -969,8 +972,25 @@ func (c *ProviderConfig) TestConnection(resolver VariableResolver) error {
 		return nil
 	}
 
+	if c.Type == catwalk.TypeOpenAICompat {
+		resolvedBaseURL, _ := resolver.ResolveValue(c.BaseURL)
+		baseURL, err := ValidateCustomProviderBaseURL(resolvedBaseURL)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err = discover.DiscoverModels(ctx, discover.Config{
+			ID:           c.ID,
+			BaseURL:      baseURL,
+			APIKey:       c.APIKey,
+			ExtraHeaders: c.ExtraHeaders,
+		}, resolver)
+		return err
+	}
+
 	switch c.Type {
-	case catwalk.TypeOpenAI, catwalk.TypeOpenAICompat, catwalk.TypeOpenRouter:
+	case catwalk.TypeOpenAI, catwalk.TypeOpenRouter:
 		baseURL, _ := resolver.ResolveValue(c.BaseURL)
 		baseURL = cmp.Or(baseURL, "https://api.openai.com/v1")
 
