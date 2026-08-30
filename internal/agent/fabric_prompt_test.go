@@ -12,8 +12,9 @@ func TestCoderPromptGuidesFabricSelection(t *testing.T) {
 	coder := config.Agent{AllowedTools: []string{"view", "fabric_exec"}}
 	enabled := addFabricCodeModeGuidance("base", coder, false)
 	require.Contains(t, enabled, "<fabric_code_mode>")
-	require.Contains(t, enabled, "default execution path for complex coding work")
-	require.Contains(t, enabled, "two or more tool calls")
+	require.Contains(t, enabled, "exclusive execution path")
+	require.Contains(t, enabled, "call fabric_exec")
+	require.Contains(t, enabled, "cannot be called directly")
 	require.Contains(t, enabled, "one genuinely trivial operation")
 	require.Contains(t, enabled, "top-level coder")
 

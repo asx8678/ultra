@@ -784,7 +784,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		}
 		fabricTools := wrapToolsWithHooks([]fantasy.AgentTool{fabricTool}, hookRunner, false)
 		fabricTools = wrapToolsWithPolicy(fabricTools, c.permissions)
-		filteredTools = append(filteredTools, fabricTools...)
+		filteredTools = modelFacingTools(filteredTools, fabricTools, true)
 	} else if !isSubAgent && !fabricEnabled && c.fabricRuntime != nil {
 		if err := c.fabricRuntime.Close(); err != nil {
 			return nil, err
@@ -793,6 +793,16 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	}
 
 	return tools.NewCatalog(filteredTools).Tools(), nil
+}
+
+// modelFacingTools enforces Code Mode at the model boundary. Native tools stay
+// registered in Fabric so nested calls retain hooks and policy checks, but an
+// enabled top-level coder can only request the fabric_exec envelope directly.
+func modelFacingTools(nativeTools, fabricTools []fantasy.AgentTool, fabricEnabled bool) []fantasy.AgentTool {
+	if fabricEnabled {
+		return fabricTools
+	}
+	return nativeTools
 }
 
 // BeginAccepted reserves an accept slot for sessionID on the active

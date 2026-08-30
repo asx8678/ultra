@@ -82,6 +82,66 @@ func TestFabricToolPendingShowsLivePhaseAndNestedCalls(t *testing.T) {
 	require.Contains(t, plain, "host.view succeeded")
 }
 
+func TestFabricToolRendersDelegatedAgentBlocksInsideCodeMode(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	item := NewFabricToolMessageItem(&sty, message.ToolCall{
+		ID: "fabric-agents", Name: tools.FabricExecToolName,
+		Input: `{"code":"return await host.agent({prompt:'inspect'})"}`,
+	}, nil, false)
+	item.AddActivity(fabric.ExecutionActivity{
+		Kind: fabric.ActivityCallStarted, Sequence: 1, Ref: "host.agent",
+	})
+
+	plain := ansi.Strip(item.Render(100))
+	require.Contains(t, plain, "CODE MODE · FABRIC")
+	require.Contains(t, plain, "AGENTS · 1 delegated through Code Mode")
+	require.Contains(t, plain, "Agent 1 · ▣ RUNNING")
+	require.Contains(t, plain, "Fabric delegated task")
+
+	item.AddActivity(fabric.ExecutionActivity{
+		Kind: fabric.ActivityCallCompleted, Sequence: 1, Ref: "host.agent",
+		Outcome: fabric.OutcomeSucceeded,
+	})
+	plain = ansi.Strip(item.Render(100))
+	require.Contains(t, plain, "Agent 1 · ■ DONE")
+}
+
+func TestFabricToolCompletedPreservesDelegatedAgentBlocks(t *testing.T) {
+	t.Parallel()
+
+	result := fabric.FabricExecResult{
+		ExecutionID: "fabric-agent-result",
+		Outcome:     fabric.OutcomeSucceeded,
+		Trace: fabric.ExecutionTrace{
+			Operations: []fabric.TraceOperation{
+				{Sequence: 1, Ref: "host.agent", Outcome: fabric.OutcomeSucceeded},
+				{Sequence: 2, Ref: "host.view", Outcome: fabric.OutcomeSucceeded},
+				{Sequence: 3, Ref: "host.agent", Outcome: fabric.OutcomeFailed},
+			},
+		},
+	}
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	sty := styles.CharmtonePantera()
+	item := NewFabricToolMessageItem(&sty,
+		message.ToolCall{ID: "fabric-agent-result", Name: tools.FabricExecToolName, Input: `{"code":"return true"}`, Finished: true},
+		&message.ToolResult{ToolCallID: "fabric-agent-result", Content: string(encoded)}, false,
+	)
+	item.SetStatus(ToolStatusSuccess)
+
+	rendered := item.Render(100)
+	plain := ansi.Strip(rendered)
+	require.Contains(t, plain, "AGENTS · 2 delegated through Code Mode")
+	require.Contains(t, plain, "Agent 1 · ■ DONE")
+	require.Contains(t, plain, "Agent 3 · ! FAILED")
+	require.NotContains(t, plain, "Agent 2 ·")
+	for line := range strings.SplitSeq(rendered, "\n") {
+		require.LessOrEqual(t, ansi.StringWidth(line), 100)
+	}
+}
+
 func TestFabricToolCompletedShowsTraceOperationsAndResult(t *testing.T) {
 	t.Parallel()
 

@@ -125,6 +125,9 @@ func (r *FabricToolRenderContext) RenderTool(
 			lines = append(lines, fabricDetailLine(sty, "Status", "starting runtime"))
 		}
 		body := renderFabricPanel(sty, lines, cappedWidth)
+		if nodes := r.agentActivityNodes(sty, cappedWidth); nodes != "" {
+			body += "\n" + nodes
+		}
 		if opts.Anim != nil {
 			body += "\n" + opts.Anim.Render()
 		}
@@ -148,6 +151,9 @@ func (r *FabricToolRenderContext) RenderTool(
 	lines = append(lines, fabricSectionLine(sty, "EXECUTION REPORT"))
 	lines = append(lines, fabricResultLines(sty, result, len(opts.Result.Content), opts.ExpandedContent)...)
 	body := renderFabricPanel(sty, lines, cappedWidth)
+	if nodes := fabricAgentOperationNodes(sty, result.Trace.Operations, cappedWidth); nodes != "" {
+		body += "\n" + nodes
+	}
 	if value := fabricResultValue(result); value != "" {
 		body += "\n" + sty.Tool.Body.Render(toolOutputPlainContent(
 			sty,
@@ -188,6 +194,89 @@ func (r *FabricToolRenderContext) liveActivityLines(sty *styles.Styles) []string
 		lines = append(lines, fabricActivityLine(sty, activity))
 	}
 	return lines
+}
+
+func (r *FabricToolRenderContext) agentActivityNodes(sty *styles.Styles, width int) string {
+	if r.item == nil {
+		return ""
+	}
+	nodes := make([]fabricAgentNode, 0, len(r.item.activities))
+	for _, activity := range r.item.activities {
+		if !isFabricAgentRef(activity.Ref) {
+			continue
+		}
+		nodes = append(nodes, fabricAgentNode{
+			sequence: int(activity.Sequence),
+			status:   fabricOutcomeToolStatus(activity.Outcome),
+		})
+	}
+	return renderFabricAgentNodes(sty, nodes, width)
+}
+
+type fabricAgentNode struct {
+	sequence int
+	status   ToolStatus
+}
+
+func fabricAgentOperationNodes(sty *styles.Styles, operations []fabric.TraceOperation, width int) string {
+	nodes := make([]fabricAgentNode, 0, len(operations))
+	for _, operation := range operations {
+		if !isFabricAgentRef(operation.Ref) {
+			continue
+		}
+		nodes = append(nodes, fabricAgentNode{
+			sequence: operation.Sequence,
+			status:   fabricOutcomeToolStatus(operation.Outcome),
+		})
+	}
+	return renderFabricAgentNodes(sty, nodes, width)
+}
+
+func renderFabricAgentNodes(sty *styles.Styles, nodes []fabricAgentNode, width int) string {
+	if len(nodes) == 0 {
+		return ""
+	}
+	width = max(1, width)
+	lines := []string{sty.Tool.AgentSummary.Render(fmt.Sprintf("AGENTS · %d delegated through Code Mode", len(nodes)))}
+	for i, node := range nodes {
+		connector := "├─ "
+		if i == len(nodes)-1 {
+			connector = "└─ "
+		}
+		name := fmt.Sprintf("Agent %d", node.sequence)
+		card := renderAgentCard(sty, node.status, name, "Fabric delegated task", min(52, max(8, width-3)))
+		for j, line := range strings.Split(card, "\n") {
+			prefix := "│  "
+			if i == len(nodes)-1 {
+				prefix = "   "
+			}
+			if j == 0 {
+				prefix = connector
+			}
+			lines = append(lines, ansi.Truncate(sty.Tool.AgentConnector.Render(prefix)+line, width, "…"))
+		}
+	}
+	for i := range lines {
+		lines[i] = ansi.Truncate(lines[i], width, "…")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isFabricAgentRef(ref string) bool {
+	return ref == "agent" || strings.HasSuffix(ref, ".agent")
+}
+
+func fabricOutcomeToolStatus(outcome fabric.ExecutionOutcome) ToolStatus {
+	switch outcome {
+	case fabric.OutcomeSucceeded:
+		return ToolStatusSuccess
+	case fabric.OutcomeAborted:
+		return ToolStatusCanceled
+	case fabric.OutcomeFailed, fabric.OutcomeTimedOut, fabric.OutcomeIndeterminate:
+		return ToolStatusError
+	default:
+		return ToolStatusRunning
+	}
 }
 
 func decodeFabricParams(input string) (tools.FabricExecParams, error) {
