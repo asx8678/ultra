@@ -659,9 +659,13 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	// exits cleanly even under -race.
 	var wg sync.WaitGroup
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseWorker := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
 	wg.Add(1)
 	t.Cleanup(func() {
-		close(release)
+		releaseWorker()
 		wg.Wait()
 	})
 
@@ -690,6 +694,11 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	start := time.Now()
 	result, err := r.Run(context.Background(), EventPreToolUse, "sess", "bash", `{}`)
 	elapsed := time.Since(start)
+
+	// Complete and join the deliberately abandoned worker before returning;
+	// cleanup remains as a fallback for assertion failures.
+	releaseWorker()
+	wg.Wait()
 
 	require.NoError(t, err)
 	require.Equal(t, DecisionNone, result.Decision)
