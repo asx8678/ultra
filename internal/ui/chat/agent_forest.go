@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/ui/anim"
+	"github.com/asx8678/ultra/internal/ui/common"
 	"github.com/asx8678/ultra/internal/ui/list"
 	"github.com/asx8678/ultra/internal/ui/styles"
 	"github.com/charmbracelet/x/ansi"
@@ -160,52 +161,47 @@ func (f *AgentForestMessageItem) ToggleExpanded() bool {
 	return f.expanded
 }
 
-func (f *AgentForestMessageItem) StartAnimation() tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(f.agents))
-	for _, child := range f.agents {
-		if cmd := child.StartAnimation(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	return tea.Batch(cmds...)
-}
+// StartAnimation is intentionally static. Agent states change through tool-call
+// and result events; the previous per-agent tick never changed the rendered
+// cards and only invalidated the entire forest.
+func (f *AgentForestMessageItem) StartAnimation() tea.Cmd { return nil }
 
-func (f *AgentForestMessageItem) Animate(msg anim.StepMsg) tea.Cmd {
-	for _, child := range f.agents {
-		if !agentContainsID(child, msg.ID) {
-			continue
-		}
-		f.Touch()
-		return child.Animate(msg)
-	}
-	return nil
-}
-
-func agentContainsID(child *AgentToolMessageItem, id string) bool {
-	if child.ID() == id {
-		return true
-	}
-	for _, nested := range child.NestedTools() {
-		if nested.ID() == id {
-			return true
-		}
-	}
-	return false
-}
+// Animate ignores stale animation ticks. Running state remains explicit through
+// its glyph and label without spending frames on invisible animation work.
+func (f *AgentForestMessageItem) Animate(anim.StepMsg) tea.Cmd { return nil }
 
 func (f *AgentForestMessageItem) RawRender(width int) string {
 	innerWidth := max(1, width-MessageLeftPaddingTotal)
-	if cached, _, ok := f.getCachedRender(innerWidth); ok && f.Finished() {
+	if cached, _, ok := f.getCachedRender(innerWidth); ok {
 		return cached
 	}
 
 	running, done, failed, canceled := f.counts()
+	if innerWidth < 24 {
+		out := f.renderNarrow(innerWidth)
+		f.setCachedRender(out, innerWidth, len(f.agents)+1)
+		return out
+	}
+	if len(f.agents) == 1 {
+		out := f.renderSingle(innerWidth)
+		f.setCachedRender(out, innerWidth, 1+strings.Count(out, "\n"))
+		return out
+	}
+	disclosure := "▸ expand"
+	if f.expanded {
+		disclosure = "▾ collapse"
+	}
 	summary := fmt.Sprintf(
-		"AGENTS · %d agents · %d running · %d done · %d failed",
-		len(f.agents), running, done, failed,
+		"AGENTS %s · %d agents · %d running · %d done · %d failed",
+		disclosure, len(f.agents), running, done, failed,
 	)
 	if canceled > 0 {
 		summary += fmt.Sprintf(" · %d canceled", canceled)
+	}
+	if len(f.agents) > 6 {
+		out := f.renderDense(innerWidth, summary)
+		f.setCachedRender(out, innerWidth, 1+strings.Count(out, "\n"))
+		return out
 	}
 	lines := []string{f.sty.Tool.AgentSummary.Render(summary)}
 	for i, child := range f.agents {
@@ -224,9 +220,17 @@ func (f *AgentForestMessageItem) RawRender(width int) string {
 			min(52, max(8, innerWidth-3)),
 		)
 		childLines := strings.Split(card, "\n")
-		for _, nested := range child.NestedTools() {
-			for line := range strings.SplitSeq(nested.Render(max(1, innerWidth-6)), "\n") {
-				childLines = append(childLines, f.sty.Tool.AgentConnector.Render("  ↳ ")+line)
+		if summary := agentNestedToolSummary(child); summary != "" {
+			childLines = append(childLines, f.sty.Tool.AgentConnector.Render("  "+summary))
+		}
+		if failure := agentFailureSummary(child); failure != "" && !f.expanded {
+			childLines = append(childLines, f.sty.Tool.AgentNodeError.Render("  "+failure))
+		}
+		if f.expanded {
+			for _, nested := range child.NestedTools() {
+				for line := range strings.SplitSeq(nested.Render(max(1, innerWidth-6)), "\n") {
+					childLines = append(childLines, f.sty.Tool.AgentConnector.Render("  ↳ ")+line)
+				}
 			}
 		}
 		if f.expanded && child.result != nil && child.result.Content != "" {
@@ -250,6 +254,181 @@ func (f *AgentForestMessageItem) RawRender(width int) string {
 	out := strings.Join(lines, "\n")
 	f.setCachedRender(out, innerWidth, len(lines))
 	return out
+}
+
+func (f *AgentForestMessageItem) renderDense(width int, summary string) string {
+	lines := []string{f.sty.Tool.AgentSummary.Render(summary)}
+	for i, child := range f.agents {
+		connector := "├─ "
+		continuation := "│  "
+		if i == len(f.agents)-1 {
+			connector = "└─ "
+			continuation = "   "
+		}
+		var params agent.AgentParams
+		_ = json.Unmarshal([]byte(child.ToolCall().Input), &params)
+		status := child.computeStatus()
+		statusStyle := f.sty.Tool.AgentNodeRunning
+		switch status {
+		case ToolStatusSuccess:
+			statusStyle = f.sty.Tool.AgentNodeSuccess
+		case ToolStatusError:
+			statusStyle = f.sty.Tool.AgentNodeError
+		case ToolStatusCanceled:
+			statusStyle = f.sty.Tool.AgentNodeCanceled
+		}
+		line := f.sty.Tool.AgentConnector.Render(connector) +
+			fmt.Sprintf("A%d ", i+1) + statusStyle.Render(agentStatusLabel(status))
+		if failure := agentFailureSummary(child); failure != "" && !f.expanded {
+			line += f.sty.Tool.AgentNodeError.Render(" · " + ansi.Truncate(failure, max(8, width/3), "…"))
+		}
+		line += " · " + f.sty.Tool.AgentPrompt.Render(strings.Join(strings.Fields(params.Prompt), " "))
+		if tools := agentNestedToolSummary(child); tools != "" {
+			line += f.sty.Tool.AgentConnector.Render(" · " + tools)
+		}
+		lines = append(lines, ansi.Truncate(line, width, "…"))
+		if !f.expanded {
+			continue
+		}
+		for _, nested := range child.NestedTools() {
+			for nestedLine := range strings.SplitSeq(nested.Render(max(1, width-6)), "\n") {
+				lines = append(lines, ansi.Truncate(
+					f.sty.Tool.AgentConnector.Render(continuation+"↳ ")+nestedLine,
+					width,
+					"…",
+				))
+			}
+		}
+		if child.result != nil && child.result.Content != "" {
+			result := toolOutputPlainContent(f.sty, child.result.Content, max(1, width-8), true)
+			for resultLine := range strings.SplitSeq(result, "\n") {
+				lines = append(lines, ansi.Truncate(
+					f.sty.Tool.AgentConnector.Render(continuation+"result ")+resultLine,
+					width,
+					"…",
+				))
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (f *AgentForestMessageItem) renderSingle(width int) string {
+	child := f.agents[0]
+	var params agent.AgentParams
+	_ = json.Unmarshal([]byte(child.ToolCall().Input), &params)
+	name := "Agent ▸ expand"
+	if f.expanded {
+		name = "Agent ▾ collapse"
+	}
+	lines := strings.Split(renderAgentCard(
+		f.sty,
+		child.computeStatus(),
+		name,
+		params.Prompt,
+		min(52, max(8, width)),
+	), "\n")
+	if summary := agentNestedToolSummary(child); summary != "" {
+		lines = append(lines, f.sty.Tool.AgentConnector.Render(summary))
+	}
+	if failure := agentFailureSummary(child); failure != "" && !f.expanded {
+		lines = append(lines, f.sty.Tool.AgentNodeError.Render(failure))
+	}
+	if f.expanded {
+		for _, nested := range child.NestedTools() {
+			for line := range strings.SplitSeq(nested.Render(max(1, width-4)), "\n") {
+				lines = append(lines, f.sty.Tool.AgentConnector.Render("↳ ")+line)
+			}
+		}
+	}
+	if f.expanded && child.result != nil && child.result.Content != "" {
+		result := toolOutputPlainContent(f.sty, child.result.Content, max(1, width-4), true)
+		for line := range strings.SplitSeq(result, "\n") {
+			lines = append(lines, f.sty.Tool.AgentConnector.Render("result ")+line)
+		}
+	}
+	for i := range lines {
+		lines[i] = ansi.Truncate(lines[i], width, "…")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func agentFailureSummary(child *AgentToolMessageItem) string {
+	if child == nil || child.computeStatus() != ToolStatusError || child.result == nil {
+		return ""
+	}
+	content := ansi.Strip(common.StripCursorControl(child.result.Content))
+	content = strings.Join(strings.Fields(content), " ")
+	if content == "" {
+		return ""
+	}
+	return "Error: " + ansi.Truncate(content, 512, "…")
+}
+
+func agentNestedToolSummary(child *AgentToolMessageItem) string {
+	if child == nil || len(child.NestedTools()) == 0 {
+		return ""
+	}
+	running, done, failed, canceled := 0, 0, 0, 0
+	for _, nested := range child.NestedTools() {
+		status := nested.Status()
+		if provider, ok := nested.(interface{ computeStatus() ToolStatus }); ok {
+			status = provider.computeStatus()
+		}
+		switch status {
+		case ToolStatusSuccess:
+			done++
+		case ToolStatusError:
+			failed++
+		case ToolStatusCanceled:
+			canceled++
+		default:
+			running++
+		}
+	}
+	parts := []string{fmt.Sprintf("Tools %d", len(child.NestedTools()))}
+	if running > 0 {
+		parts = append(parts, fmt.Sprintf("%d running", running))
+	}
+	if done > 0 {
+		parts = append(parts, fmt.Sprintf("%d done", done))
+	}
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	if canceled > 0 {
+		parts = append(parts, fmt.Sprintf("%d canceled", canceled))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (f *AgentForestMessageItem) renderNarrow(width int) string {
+	lines := []string{f.sty.Tool.AgentSummary.Render(fmt.Sprintf("AGENTS %d", len(f.agents)))}
+	for i, child := range f.agents {
+		connector := "├ "
+		if i == len(f.agents)-1 {
+			connector = "└ "
+		}
+		var params agent.AgentParams
+		_ = json.Unmarshal([]byte(child.ToolCall().Input), &params)
+		status := agentStatusShortLabel(child.computeStatus())
+		line := fmt.Sprintf("%sA%d %s %s", connector, i+1, status, strings.Join(strings.Fields(params.Prompt), " "))
+		lines = append(lines, f.sty.Tool.AgentConnector.Render(ansi.Truncate(line, width, "…")))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func agentStatusShortLabel(status ToolStatus) string {
+	switch status {
+	case ToolStatusSuccess:
+		return "■ DONE"
+	case ToolStatusError:
+		return "! FAIL"
+	case ToolStatusCanceled:
+		return "× STOP"
+	default:
+		return "▣ RUN"
+	}
 }
 
 func (f *AgentForestMessageItem) Render(width int) string {

@@ -2,11 +2,13 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/message"
+	"github.com/asx8678/ultra/internal/ui/anim"
 	"github.com/asx8678/ultra/internal/ui/styles"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
@@ -66,7 +68,8 @@ func TestAgentForestRendersStatusesNestedActivityAndExpansion(t *testing.T) {
 	for _, status := range []string{"RUNNING", "DONE", "FAILED", "CANCELED"} {
 		require.Contains(t, plain, status)
 	}
-	require.Contains(t, plain, "View")
+	require.Contains(t, plain, "Tools 1 · 1 running")
+	require.NotContains(t, plain, "View")
 	require.NotContains(t, plain, "full completion report")
 	require.ElementsMatch(t,
 		[]string{"running", "nested-view", "done", "failed", "canceled"},
@@ -75,6 +78,7 @@ func TestAgentForestRendersStatusesNestedActivityAndExpansion(t *testing.T) {
 
 	require.True(t, forest.ToggleExpanded())
 	expanded := ansi.Strip(forest.Render(100))
+	require.Contains(t, expanded, "View")
 	require.Contains(t, expanded, "full completion report")
 	require.Contains(t, expanded, "failure details")
 }
@@ -94,6 +98,100 @@ func TestAgentForestRenderingIsWidthBounded(t *testing.T) {
 			require.LessOrEqualf(t, ansi.StringWidth(line), width, "width %d", width)
 		}
 	}
+}
+
+func TestAgentForestNarrowFallbackUsesIntactRows(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	forest := NewAgentForestMessageItem(&sty, "assistant-narrow-rows", []*AgentToolMessageItem{
+		newAgentItem(t, &sty, "a", "Trace narrow output", false, nil),
+		newAgentItem(t, &sty, "b", "Check connected rows", true, &message.ToolResult{ToolCallID: "b", Content: "done"}),
+	})
+
+	for _, width := range []int{12, 16, 20, 23} {
+		rendered := forest.Render(width)
+		plain := ansi.Strip(rendered)
+		require.NotContains(t, plain, "╭", "width %d must not show a clipped card", width)
+		require.NotContains(t, plain, "╯", "width %d must not show a clipped card", width)
+		require.Contains(t, plain, "AGENTS")
+		for line := range strings.SplitSeq(rendered, "\n") {
+			require.LessOrEqualf(t, ansi.StringWidth(line), width, "width %d", width)
+		}
+	}
+}
+
+func TestAgentForestAdaptsSingletonAndLargeFanout(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	single := NewAgentForestMessageItem(&sty, "assistant-single", []*AgentToolMessageItem{
+		newAgentItem(t, &sty, "single", "Inspect one task", false, nil),
+	})
+	singlePlain := ansi.Strip(single.Render(120))
+	require.Equal(t, 4, 1+strings.Count(singlePlain, "\n"))
+	require.Contains(t, singlePlain, "╭")
+	require.Equal(t, 1, strings.Count(singlePlain, "RUNNING"))
+
+	agents := make([]*AgentToolMessageItem, 0, 20)
+	for i := 1; i <= 20; i++ {
+		agents = append(agents, newAgentItem(
+			t,
+			&sty,
+			fmt.Sprintf("agent-%02d", i),
+			fmt.Sprintf("task %02d", i),
+			false,
+			nil,
+		))
+	}
+	large := NewAgentForestMessageItem(&sty, "assistant-large", agents)
+	largePlain := ansi.Strip(large.Render(120))
+	require.LessOrEqual(t, 1+strings.Count(largePlain, "\n"), 21)
+	require.NotContains(t, largePlain, "╭")
+	require.Contains(t, largePlain, "A1")
+	require.Contains(t, largePlain, "A20")
+	require.Contains(t, largePlain, "task 01")
+	require.Contains(t, largePlain, "task 20")
+}
+
+func TestAgentForestStaticRunningStateReusesCache(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	forest := NewAgentForestMessageItem(&sty, "assistant-static", []*AgentToolMessageItem{
+		newAgentItem(t, &sty, "running", "Keep status visible", false, nil),
+	})
+	first := forest.RawRender(120)
+	version := forest.Version()
+
+	require.Nil(t, forest.StartAnimation())
+	require.Nil(t, forest.Animate(anim.StepMsg{ID: "running"}))
+	require.Equal(t, version, forest.Version())
+	require.Equal(t, first, forest.RawRender(120))
+}
+
+func TestAgentForestCollapsedFailureIsSafeAndDiscoverable(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	failed := newAgentItem(t, &sty, "failed", "Inspect failure", true, &message.ToolResult{
+		ToolCallID: "failed",
+		Content:    "\x1b[2Jfailure reason",
+		IsError:    true,
+	})
+	forest := NewAgentForestMessageItem(&sty, "assistant-failed", []*AgentToolMessageItem{
+		newAgentItem(t, &sty, "running", "Keep working", false, nil),
+		failed,
+	})
+
+	rendered := forest.Render(40)
+	plain := ansi.Strip(rendered)
+	require.Contains(t, plain, "AGENTS ▸ expand")
+	require.Contains(t, plain, "Error: failure reason")
+	require.NotContains(t, rendered, "\x1b[2J")
+
+	require.True(t, forest.ToggleExpanded())
+	require.Contains(t, ansi.Strip(forest.Render(40)), "AGENTS ▾ collapse")
 }
 
 func TestAgentForestAddAgentPreservesOrderAndIdentity(t *testing.T) {
