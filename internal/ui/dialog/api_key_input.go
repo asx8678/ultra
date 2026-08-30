@@ -74,6 +74,8 @@ func NewAPIKeyInput(
 
 	m.input = textinput.New()
 	m.input.SetVirtualCursor(false)
+	m.input.EchoMode = textinput.EchoPassword
+	m.input.EchoCharacter = '•'
 	m.input.Placeholder = "Enter your API key..."
 	m.input.SetStyles(com.Styles.TextInput)
 	m.input.Focus()
