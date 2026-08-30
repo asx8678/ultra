@@ -309,6 +309,9 @@ func installGojaFabricBridge(
 		if update.Kind == "" {
 			panic(vm.NewGoError(errors.New("fabric progress kind is required")))
 		}
+		if request.Bridge == nil {
+			panic(vm.NewGoError(errors.New("fabric progress bridge is unavailable")))
+		}
 		if err := request.Bridge.Progress(update); err != nil {
 			panic(vm.NewGoError(err))
 		}
