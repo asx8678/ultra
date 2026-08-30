@@ -637,6 +637,20 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.Tool.ParamMain = subtle
 	s.Tool.ParamKey = subtle
 
+	// Fabric Code Mode dashboard. Keep these token-driven so every theme gets
+	// the same prominent treatment without inheriting palette-specific colors.
+	s.Tool.FabricBadge = base.
+		Foreground(o.onPrimary).
+		Background(o.primary).
+		Bold(true).
+		Padding(0, 1)
+	s.Tool.FabricPanel = base.
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(o.primary).
+		Padding(0, 1)
+	s.Tool.FabricSection = base.Foreground(o.primary).Bold(true)
+	s.Tool.FabricValue = base.Foreground(o.fgBase).Bold(true)
+
 	// Content rendering - prepared styles that accept width parameter
 	s.Tool.ContentLine = muted.Background(o.bgLeastVisible)
 	s.Tool.ContentTruncation = muted.Background(o.bgLeastVisible)

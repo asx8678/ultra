@@ -29,6 +29,9 @@ type FabricToolMessageItem struct {
 	phase           string
 	capabilityView  string
 	capabilityCount int
+	inputSchemas    int
+	outputSchemas   int
+	riskCounts      map[fabric.RiskClass]int
 	providers       []string
 	activities      []fabric.ExecutionActivity
 }
@@ -61,6 +64,9 @@ func (f *FabricToolMessageItem) AddActivity(activity fabric.ExecutionActivity) {
 		if activity.CapabilityViewID != "" {
 			f.capabilityView = activity.CapabilityViewID
 			f.capabilityCount = activity.CapabilityCount
+			f.inputSchemas = activity.InputSchemas
+			f.outputSchemas = activity.OutputSchemas
+			f.riskCounts = cloneFabricRiskCounts(activity.RiskCounts)
 			f.providers = slices.Clone(activity.Providers)
 		}
 		f.clearCache()
@@ -99,22 +105,26 @@ func (r *FabricToolRenderContext) RenderTool(
 	params, paramsErr := decodeFabricParams(opts.ToolCall.Input)
 	activity := cmp.Or(params.Display.Title, fabricProgramSummary(params.Code))
 
+	badge := sty.Tool.FabricBadge.Render("CODE MODE · FABRIC")
 	header := toolHeader(sty, opts.Status, "Fabric", cappedWidth, opts, activity)
 	if opts.Compact {
-		return header
+		return badge + " " + header
 	}
+	header = badge + "\n" + header
 
-	lines := fabricRuntimeLines(sty, params, r.item)
+	lines := []string{fabricSectionLine(sty, "RUNTIME")}
+	lines = append(lines, fabricRuntimeLines(sty, params, r.item)...)
 	if paramsErr != nil {
 		lines = append(lines, fabricDetailLine(sty, "Input", "invalid parameters"))
 	}
 
 	if opts.IsPending() {
+		lines = append(lines, fabricSectionLine(sty, "LIVE EXECUTION"))
 		lines = append(lines, r.liveActivityLines(sty)...)
 		if r.item == nil || r.item.phase == "" {
 			lines = append(lines, fabricDetailLine(sty, "Status", "starting runtime"))
 		}
-		body := renderFabricLines(sty, lines, cappedWidth)
+		body := renderFabricPanel(sty, lines, cappedWidth)
 		if opts.Anim != nil {
 			body += "\n" + opts.Anim.Render()
 		}
@@ -123,20 +133,21 @@ func (r *FabricToolRenderContext) RenderTool(
 
 	if opts.IsCanceled() && !opts.HasResult() {
 		lines = append(lines, fabricDetailLine(sty, "Outcome", "cancelled"))
-		return joinToolParts(header, renderFabricLines(sty, lines, cappedWidth))
+		return joinToolParts(header, renderFabricPanel(sty, lines, cappedWidth))
 	}
 	if !opts.HasResult() || opts.Result.Content == "" {
-		return joinToolParts(header, renderFabricLines(sty, lines, cappedWidth))
+		return joinToolParts(header, renderFabricPanel(sty, lines, cappedWidth))
 	}
 
 	var result fabric.FabricExecResult
 	if err := json.Unmarshal([]byte(opts.Result.Content), &result); err != nil {
 		lines = append(lines, fabricDetailLine(sty, "Result", "unrecognized Fabric response"))
-		return joinToolParts(header, renderFabricLines(sty, lines, cappedWidth))
+		return joinToolParts(header, renderFabricPanel(sty, lines, cappedWidth))
 	}
 
-	lines = append(lines, fabricResultLines(sty, result, opts.ExpandedContent)...)
-	body := renderFabricLines(sty, lines, cappedWidth)
+	lines = append(lines, fabricSectionLine(sty, "EXECUTION REPORT"))
+	lines = append(lines, fabricResultLines(sty, result, len(opts.Result.Content), opts.ExpandedContent)...)
+	body := renderFabricPanel(sty, lines, cappedWidth)
 	if value := fabricResultValue(result); value != "" {
 		body += "\n" + sty.Tool.Body.Render(toolOutputPlainContent(
 			sty,
@@ -154,7 +165,7 @@ func (r *FabricToolRenderContext) liveActivityLines(sty *styles.Styles) []string
 	}
 	lines := make([]string, 0, len(r.item.activities)+2)
 	if r.item.phase != "" {
-		lines = append(lines, fabricDetailLine(sty, "Phase", r.item.phase))
+		lines = append(lines, fabricDetailLine(sty, "Pipeline", fabricPhaseTimeline(r.item.phase)))
 	}
 	if len(r.item.activities) > 0 {
 		started := 0
@@ -211,6 +222,10 @@ func fabricRuntimeLines(
 	if agents <= 0 {
 		agents = fabricDefaultAgentBudget
 	}
+	resultLimit := params.ResultMaxBytes
+	if resultLimit <= 0 {
+		resultLimit = fabric.DefaultJSONLimits().MaxBytes
+	}
 	view := params.CapabilityViewID
 	if view == "" && item != nil {
 		view = item.capabilityView
@@ -218,7 +233,13 @@ func fabricRuntimeLines(
 	view = cmp.Or(view, "live pinned snapshot")
 
 	lines := []string{
-		fabricDetailLine(sty, "Pipeline", "TypeScript → esbuild → isolated Goja → registry"),
+		fabricDetailLine(sty, "Engine", "TypeScript → esbuild → isolated Goja → registry"),
+		fabricDetailLine(sty, "Program", fmt.Sprintf(
+			"%s · %s source · %d named strings",
+			formatFabricLineCount(fabricSourceLines(params.Code)),
+			formatFabricBytes(int64(len(params.Code))),
+			len(params.Strings),
+		)),
 		fabricDetailLine(sty, "View", view),
 	}
 	if item != nil && item.capabilityCount > 0 {
@@ -227,12 +248,26 @@ func fabricRuntimeLines(
 			capabilities += " · providers=" + strings.Join(item.providers, ",")
 		}
 		lines = append(lines, fabricDetailLine(sty, "Capabilities", capabilities))
+		lines = append(lines, fabricDetailLine(sty, "Schemas", fmt.Sprintf(
+			"%d input validated · %d output validated",
+			item.inputSchemas, item.outputSchemas,
+		)))
+		if risks := formatFabricRiskCounts(item.riskCounts); risks != "" {
+			lines = append(lines, fabricDetailLine(sty, "Authority", risks))
+		}
+	} else {
+		lines = append(lines, fabricDetailLine(
+			sty,
+			"Schemas",
+			"authoritative input + output JSON Schema validation",
+		))
 	}
 	lines = append(lines,
-		fabricDetailLine(sty, "Policy", "Ultra session permissions + hooks"),
-		fabricDetailLine(sty, "Limits", fmt.Sprintf(
-			"timeout=%s · memory=%s · calls=%d · agents=%d",
+		fabricDetailLine(sty, "Policy", "fail-closed · session permissions · PreToolUse hooks"),
+		fabricDetailLine(sty, "Budgets", fmt.Sprintf(
+			"timeout=%s · memory=%s · calls=%d · agents=%d · result=%s",
 			formatFabricDuration(timeout), formatFabricBytes(memory), fabric.MaxNestedCalls, agents,
+			formatFabricBytes(int64(resultLimit)),
 		)),
 		fabricDetailLine(sty, "Mesh", "not active · capability registry only"),
 	)
@@ -242,11 +277,13 @@ func fabricRuntimeLines(
 func fabricResultLines(
 	sty *styles.Styles,
 	result fabric.FabricExecResult,
+	resultBytes int,
 	expanded bool,
 ) []string {
 	lines := []string{
 		fabricDetailLine(sty, "Execution", cmp.Or(result.ExecutionID, "unknown")),
 		fabricDetailLine(sty, "Outcome", string(result.Outcome)),
+		fabricDetailLine(sty, "Envelope", formatFabricBytes(int64(resultBytes))),
 	}
 	if len(result.Trace.Phases) > 0 {
 		lines = append(lines, fabricDetailLine(sty, "Phases", strings.Join(result.Trace.Phases, " → ")))
@@ -326,6 +363,59 @@ func fabricProviders(operations []fabric.TraceOperation) []string {
 	return providers
 }
 
+func cloneFabricRiskCounts(counts map[fabric.RiskClass]int) map[fabric.RiskClass]int {
+	if len(counts) == 0 {
+		return nil
+	}
+	clone := make(map[fabric.RiskClass]int, len(counts))
+	for risk, count := range counts {
+		clone[risk] = count
+	}
+	return clone
+}
+
+func formatFabricRiskCounts(counts map[fabric.RiskClass]int) string {
+	ordered := []fabric.RiskClass{
+		fabric.RiskRead,
+		fabric.RiskWrite,
+		fabric.RiskExecute,
+		fabric.RiskNetwork,
+		fabric.RiskAgent,
+	}
+	parts := make([]string, 0, len(ordered))
+	for _, risk := range ordered {
+		if count := counts[risk]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", risk, count))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func fabricSourceLines(source string) int {
+	if source == "" {
+		return 0
+	}
+	return strings.Count(source, "\n") + 1
+}
+
+func formatFabricLineCount(count int) string {
+	if count == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", count)
+}
+
+func fabricPhaseTimeline(phase string) string {
+	switch phase {
+	case "compile":
+		return "● compile → ○ execute"
+	case "execute":
+		return "✓ compile → ● execute"
+	default:
+		return phase
+	}
+}
+
 func fabricCallCounts(operations []fabric.TraceOperation) (succeeded, failed int) {
 	for _, operation := range operations {
 		if operation.Outcome == fabric.OutcomeSucceeded {
@@ -389,15 +479,20 @@ func fabricOperationLine(sty *styles.Styles, operation fabric.TraceOperation) st
 }
 
 func fabricDetailLine(sty *styles.Styles, label, value string) string {
-	return sty.Tool.ParamKey.Render(label+":") + " " + sty.Tool.ParamMain.Render(value)
+	return sty.Tool.ParamKey.Render(label+":") + " " + sty.Tool.FabricValue.Render(value)
 }
 
-func renderFabricLines(sty *styles.Styles, lines []string, width int) string {
-	bodyWidth := max(1, width-toolBodyLeftPaddingTotal)
+func fabricSectionLine(sty *styles.Styles, title string) string {
+	return sty.Tool.FabricSection.Render("▸ " + title)
+}
+
+func renderFabricPanel(sty *styles.Styles, lines []string, width int) string {
+	const panelFrameWidth = 4 // Two border cells and one padding cell per side.
+	bodyWidth := max(1, width-panelFrameWidth)
 	for i, line := range lines {
 		lines[i] = ansi.Truncate(line, bodyWidth, "…")
 	}
-	return sty.Tool.Body.Render(strings.Join(lines, "\n"))
+	return sty.Tool.FabricPanel.Width(bodyWidth).Render(strings.Join(lines, "\n"))
 }
 
 func fabricResultValue(result fabric.FabricExecResult) string {
@@ -419,9 +514,15 @@ func formatFabricDuration(value time.Duration) string {
 }
 
 func formatFabricBytes(value int64) string {
-	const mebibyte = int64(1 << 20)
-	if value%mebibyte == 0 {
+	const (
+		kibibyte = int64(1 << 10)
+		mebibyte = int64(1 << 20)
+	)
+	if value >= mebibyte && value%mebibyte == 0 {
 		return fmt.Sprintf("%d MiB", value/mebibyte)
+	}
+	if value >= kibibyte && value%kibibyte == 0 {
+		return fmt.Sprintf("%d KiB", value/kibibyte)
 	}
 	return fmt.Sprintf("%d bytes", value)
 }

@@ -341,6 +341,12 @@ type Styles struct {
 		ParamMain lipgloss.Style
 		ParamKey  lipgloss.Style
 
+		// Fabric Code Mode dashboard styles.
+		FabricBadge   lipgloss.Style
+		FabricPanel   lipgloss.Style
+		FabricSection lipgloss.Style
+		FabricValue   lipgloss.Style
+
 		// Content rendering styles
 		ContentLine           lipgloss.Style // Individual content line with background and width
 		ContentTruncation     lipgloss.Style // Truncation message "… (N lines)"

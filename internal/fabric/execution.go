@@ -114,6 +114,9 @@ type ExecutionActivity struct {
 	Ref              string                `json:"ref,omitempty"`
 	CapabilityViewID string                `json:"capability_view_id,omitempty"`
 	CapabilityCount  int                   `json:"capability_count,omitempty"`
+	InputSchemas     int                   `json:"input_schemas,omitempty"`
+	OutputSchemas    int                   `json:"output_schemas,omitempty"`
+	RiskCounts       map[RiskClass]int     `json:"risk_counts,omitempty"`
 	Providers        []string              `json:"providers,omitempty"`
 	Outcome          ExecutionOutcome      `json:"outcome,omitempty"`
 	FailureStage     FailureStage          `json:"failure_stage,omitempty"`
@@ -239,7 +242,7 @@ func (s *ExecutionService) Execute(
 	defer view.Release()
 
 	trace.Phase("compile")
-	compileActivity := capabilityActivity(view)
+	compileActivity := capabilityActivity(s.Registry, view)
 	compileActivity.Kind = ActivityPhase
 	compileActivity.Phase = "compile"
 	s.publishActivity(outer, compileActivity)
@@ -337,8 +340,8 @@ func (s *ExecutionService) Execute(
 	return result
 }
 
-func capabilityActivity(view *CapabilityView) ExecutionActivity {
-	if view == nil {
+func capabilityActivity(registry *Registry, view *CapabilityView) ExecutionActivity {
+	if registry == nil || view == nil {
 		return ExecutionActivity{}
 	}
 	bindings := view.Bindings()
@@ -353,11 +356,27 @@ func capabilityActivity(view *CapabilityView) ExecutionActivity {
 		providers = append(providers, provider)
 	}
 	slices.Sort(providers)
-	return ExecutionActivity{
+
+	activity := ExecutionActivity{
 		CapabilityViewID: view.ID(),
 		CapabilityCount:  len(bindings),
 		Providers:        providers,
+		RiskCounts:       make(map[RiskClass]int),
 	}
+	catalog, err := registry.Catalog(view)
+	if err != nil {
+		return activity
+	}
+	for _, action := range catalog {
+		if len(action.Descriptor.InputSchema) > 0 {
+			activity.InputSchemas++
+		}
+		if len(action.Descriptor.OutputSchema) > 0 {
+			activity.OutputSchemas++
+		}
+		activity.RiskCounts[action.Descriptor.Risk]++
+	}
+	return activity
 }
 
 func (s *ExecutionService) publishActivity(outer OuterInvocationContext, activity ExecutionActivity) {

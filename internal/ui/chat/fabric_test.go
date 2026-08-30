@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/asx8678/ultra/internal/agent/tools"
@@ -30,11 +31,16 @@ func TestFabricToolPendingShowsRuntimeAndRequestedLimits(t *testing.T) {
 	}, nil, false)
 
 	plain := ansi.Strip(item.Render(160))
+	require.Contains(t, plain, "CODE MODE · FABRIC")
 	require.Contains(t, plain, "Fabric Inspect README")
+	require.Contains(t, plain, "▸ RUNTIME")
 	require.Contains(t, plain, "TypeScript → esbuild → isolated Goja → registry")
+	require.Contains(t, plain, "Program: 1 line · 47 bytes source · 0 named strings")
+	require.Contains(t, plain, "Schemas: authoritative input + output JSON Schema validation")
 	require.Contains(t, plain, "View: view:7")
-	require.Contains(t, plain, "timeout=30s · memory=32 MiB · calls=128 · agents=2")
+	require.Contains(t, plain, "timeout=30s · memory=32 MiB · calls=128 · agents=2 · result=256 KiB")
 	require.Contains(t, plain, "Mesh: not active · capability registry only")
+	require.Contains(t, plain, "▸ LIVE EXECUTION")
 	require.Contains(t, plain, "Status: starting runtime")
 }
 
@@ -48,7 +54,11 @@ func TestFabricToolPendingShowsLivePhaseAndNestedCalls(t *testing.T) {
 	}, nil, false)
 	item.AddActivity(fabric.ExecutionActivity{
 		Kind: fabric.ActivityPhase, Phase: "compile", CapabilityViewID: "view:9",
-		CapabilityCount: 12, Providers: []string{"host", "mcp"},
+		CapabilityCount: 12, InputSchemas: 12, OutputSchemas: 7,
+		RiskCounts: map[fabric.RiskClass]int{
+			fabric.RiskRead: 8, fabric.RiskWrite: 2, fabric.RiskNetwork: 2,
+		},
+		Providers: []string{"host", "mcp"},
 	})
 	item.AddActivity(fabric.ExecutionActivity{
 		Kind: fabric.ActivityCallStarted, Sequence: 1, Ref: "host.view",
@@ -57,7 +67,9 @@ func TestFabricToolPendingShowsLivePhaseAndNestedCalls(t *testing.T) {
 	plain := ansi.Strip(item.Render(160))
 	require.Contains(t, plain, "View: view:9")
 	require.Contains(t, plain, "Capabilities: 12 actions · providers=host,mcp")
-	require.Contains(t, plain, "Phase: compile")
+	require.Contains(t, plain, "Schemas: 12 input validated · 7 output validated")
+	require.Contains(t, plain, "Authority: read=8 · write=2 · network=2")
+	require.Contains(t, plain, "Pipeline: ● compile → ○ execute")
 	require.Contains(t, plain, "Live calls: 1 observed · 1 active · 0 completed")
 	require.Contains(t, plain, "host.view running")
 
@@ -110,7 +122,10 @@ func TestFabricToolCompletedShowsTraceOperationsAndResult(t *testing.T) {
 	item.SetStatus(ToolStatusSuccess)
 
 	plain := ansi.Strip(item.Render(160))
+	require.Contains(t, plain, "CODE MODE · FABRIC")
+	require.Contains(t, plain, "▸ EXECUTION REPORT")
 	require.Contains(t, plain, "Execution: fabric-2")
+	require.Contains(t, plain, "Envelope:")
 	require.Contains(t, plain, "Phases: compile → execute")
 	require.Contains(t, plain, "Providers: host, mcp")
 	require.Contains(t, plain, "Calls: 2 total · 1 succeeded · 1 failed")
@@ -119,6 +134,35 @@ func TestFabricToolCompletedShowsTraceOperationsAndResult(t *testing.T) {
 	require.Contains(t, plain, "Trace: redacted=3 · truncated=1 · dropped=0")
 	require.Contains(t, plain, "Logs: 1 sandbox entries")
 	require.Contains(t, plain, `Result: {"files":2}`)
+}
+
+func TestFabricToolCompactStillShowsCodeModeBadge(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	item := NewFabricToolMessageItem(&sty, message.ToolCall{
+		ID: "fabric-compact", Name: tools.FabricExecToolName,
+		Input: `{"code":"return true","display":{"compact":true}}`,
+	}, nil, false)
+	item.SetCompact(true)
+
+	plain := ansi.Strip(item.Render(80))
+	require.Contains(t, plain, "CODE MODE · FABRIC")
+	require.Contains(t, plain, "Fabric return true")
+}
+
+func TestFabricToolNarrowPanelRemainsBounded(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	item := NewFabricToolMessageItem(&sty, message.ToolCall{
+		ID: "fabric-narrow", Name: tools.FabricExecToolName,
+		Input: `{"code":"return await host.extremely_long_capability_name({})"}`,
+	}, nil, false)
+
+	for line := range strings.SplitSeq(item.Render(40), "\n") {
+		require.LessOrEqual(t, ansi.StringWidth(line), 40)
+	}
 }
 
 func TestToolFactoryUsesDedicatedFabricRenderer(t *testing.T) {
