@@ -15,6 +15,7 @@ import (
 
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/message"
+	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
@@ -484,11 +485,18 @@ func (c *Client) UpdateAgent(ctx context.Context, id string) error {
 // The server mints one when it is omitted, so every submitted turn still has
 // an internal lifecycle identity.
 func (c *Client) SendMessage(ctx context.Context, id string, sessionID, runID, prompt string, attachments ...message.Attachment) error {
+	return c.SendMessageWithPermissionMode(ctx, id, sessionID, runID, prompt, "", attachments...)
+}
+
+// SendMessageWithPermissionMode sends a message with an explicit headless
+// permission policy.
+func (c *Client) SendMessageWithPermissionMode(ctx context.Context, id string, sessionID, runID, prompt string, mode permission.Mode, attachments ...message.Attachment) error {
 	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent", id), nil, jsonBody(proto.AgentMessage{
-		SessionID:   sessionID,
-		RunID:       runID,
-		Prompt:      prompt,
-		Attachments: proto.AttachmentsFromMessage(attachments),
+		SessionID:      sessionID,
+		RunID:          runID,
+		Prompt:         prompt,
+		PermissionMode: string(mode),
+		Attachments:    proto.AttachmentsFromMessage(attachments),
 	}), http.Header{"Content-Type": []string{"application/json"}})
 	if err != nil {
 		return fmt.Errorf("failed to send message to agent: %w", err)

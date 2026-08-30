@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -58,6 +59,8 @@ type fileSnapshot struct {
 // the lifetime of the process (or workspace).
 type RuntimeOverrides struct {
 	SkipPermissionRequests bool
+	// PermissionMode controls non-interactive permission resolution.
+	PermissionMode string
 	// EnabledChannels lists the MCP servers opted in as channels for this
 	// session (via the --channels flag). A server present in MCP config only
 	// pushes channel events when it also appears here. Entries may be written
@@ -98,6 +101,7 @@ type ConfigStore struct {
 	overrides          RuntimeOverrides
 	trackedConfigPaths []string                // unique, normalized config file paths
 	snapshots          map[string]fileSnapshot // path -> snapshot at last capture
+	runtimeGeneration  atomic.Uint64
 
 	// configMu guards the config pointer field against concurrent
 	// readers (Config) and the writeMu-serialised swap (setConfig). It
@@ -147,8 +151,16 @@ func (s *ConfigStore) Config() *Config {
 // untouched and run under mu instead.
 func (s *ConfigStore) setConfig(cfg *Config) {
 	s.configMu.Lock()
-	defer s.configMu.Unlock()
 	s.config = cfg
+	s.configMu.Unlock()
+	s.runtimeGeneration.Add(1)
+}
+
+// RuntimeGeneration changes whenever the immutable runtime configuration is
+// replaced. Consumers use it to avoid rebuilding models and tools for
+// unchanged turns.
+func (s *ConfigStore) RuntimeGeneration() uint64 {
+	return s.runtimeGeneration.Load()
 }
 
 // WorkingDir returns the current working directory.

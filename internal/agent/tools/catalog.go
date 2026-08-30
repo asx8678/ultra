@@ -5,12 +5,17 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"github.com/asx8678/ultra/internal/toolmeta"
 )
 
 // ToolDescriptor is the stable, execution-free description of a host tool.
 type ToolDescriptor struct {
-	Name        string
-	Description string
+	Name         string
+	Description  string
+	Group        string
+	Effects      toolmeta.Effect
+	Interactive  bool
+	SubagentSafe bool
 }
 
 // ToolRegistry lists tool metadata without exposing execution details.
@@ -37,7 +42,14 @@ func (c *Catalog) List() []ToolDescriptor {
 	result := make([]ToolDescriptor, 0, len(c.tools))
 	for _, tool := range c.tools {
 		info := tool.Info()
-		result = append(result, ToolDescriptor{Name: info.Name, Description: info.Description})
+		descriptor := ToolDescriptor{Name: info.Name, Description: info.Description}
+		if metadata, ok := toolmeta.Lookup(info.Name); ok {
+			descriptor.Group = metadata.Group
+			descriptor.Effects = metadata.Effects
+			descriptor.Interactive = metadata.Interactive
+			descriptor.SubagentSafe = metadata.SubagentSafe
+		}
+		result = append(result, descriptor)
 	}
 	return result
 }

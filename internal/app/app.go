@@ -80,6 +80,11 @@ type App struct {
 // caller is responsible for constructing it (typically via
 // skills.NewManager + skills.DiscoverFromConfig).
 func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr *skills.Manager) (*App, error) {
+	return NewWithProfile(ctx, conn, store, skillsMgr, InteractiveProfile())
+}
+
+// NewWithProfile initializes only the services required by profile.
+func NewWithProfile(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr *skills.Manager, profile RuntimeProfile) (*App, error) {
 	q := db.New(conn)
 	sessions := session.NewService(q, conn)
 	messages := message.NewService(q)
@@ -105,43 +110,52 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 
 		config: store,
 
-		events:             pubsub.NewBroker[tea.Msg](),
+		events:             pubsub.NewBrokerWithOptions[tea.Msg](256),
 		serviceEventsWG:    &sync.WaitGroup{},
 		tuiWG:              &sync.WaitGroup{},
-		agentNotifications: pubsub.NewBroker[notify.Notification](),
-		runCompletions:     pubsub.NewBroker[notify.RunComplete](),
+		agentNotifications: pubsub.NewBrokerWithOptions[notify.Notification](64),
+		runCompletions:     pubsub.NewBrokerWithOptions[notify.RunComplete](16),
 	}
 
-	app.setupEvents()
-
-	// Initialize clipboard support. This is best-effort; if it fails
-	// (e.g., headless environment), clipboard operations will return nil.
-	if err := clipboard.Init(); err != nil {
-		slog.Warn("Clipboard initialization failed", "error", err)
+	if profile.eventBridge {
+		app.setupEvents()
 	}
 
-	// Arm initialization synchronously before launching it so WaitForInit
-	// blocks for the in-flight init instead of racing the goroutine and
-	// returning before any MCP tools register.
-	mcp.ArmInit()
-	go mcp.Initialize(ctx, app.Permissions, store)
+	if profile.clipboard {
+		// Clipboard support is best-effort in interactive terminals.
+		if err := clipboard.Init(); err != nil {
+			slog.Warn("Clipboard initialization failed", "error", err)
+		}
+	}
+
+	if profile.mcp {
+		// Arm initialization synchronously before launching it so WaitForInit
+		// blocks for the in-flight init instead of racing the goroutine.
+		mcp.ArmInit()
+		go mcp.Initialize(ctx, app.Permissions, store)
+	}
 
 	// Release the shared database connection on shutdown. The pool
 	// closes the underlying *sql.DB when the last reference is released.
 	dataDir := cfg.Options.DataDirectory
-	app.cleanupFuncs = append(
-		app.cleanupFuncs,
-		func(context.Context) error { return db.Release(dataDir) },
-		func(ctx context.Context) error { return mcp.Close(ctx) },
-	)
+	app.cleanupFuncs = append(app.cleanupFuncs, func(context.Context) error { return db.Release(dataDir) })
+	if profile.mcp {
+		app.cleanupFuncs = append(app.cleanupFuncs, func(ctx context.Context) error { return mcp.Close(ctx) })
+	}
 
 	// TODO: remove the concept of agent config, most likely.
 	if !cfg.IsConfigured() {
 		slog.Warn("No agent configuration found")
 		return app, nil
 	}
-	if err := app.InitCoderAgent(ctx); err != nil {
-		return nil, fmt.Errorf("failed to initialize coder agent: %w", err)
+	if profile.initializeAgent {
+		if err := app.initCoderAgent(ctx, profile.interactive); err != nil {
+			return nil, fmt.Errorf("failed to initialize coder agent: %w", err)
+		}
+	}
+
+	if !profile.trackLSP {
+		return app, nil
 	}
 
 	// Set up callback for LSP state updates.
@@ -231,11 +245,6 @@ func (app *App) resolveSession(ctx context.Context, continueSessionID string, us
 func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt, largeModel, smallModel string, hideSpinner bool, continueSessionID string, useLast bool) error {
 	slog.Info("Running in non-interactive mode")
 
-	// Re-initialize the coder agent without interactive-only tools.
-	if err := app.InitCoderAgentNonInteractive(ctx); err != nil {
-		return fmt.Errorf("failed to reinitialize agent for non-interactive mode: %w", err)
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -301,13 +310,14 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 		slog.Info("Created session for non-interactive run", "session_id", sess.ID)
 	}
 
-	// Only auto-approve permission requests for this non-interactive session
-	// when permission-skip (yolo) mode is explicitly enabled. Without it the
-	// session runs under the normal permission policy, so headless execution
-	// never silently becomes yolo merely because stdout is not a TTY.
-	if app.Permissions.SkipRequests() {
-		app.Permissions.AutoApproveSession(sess.ID)
+	mode := permission.ModeReadOnly
+	if configured, ok := permission.ParseMode(app.config.Overrides().PermissionMode); ok {
+		mode = configured
 	}
+	if app.Permissions.SkipRequests() {
+		mode = permission.ModeYolo
+	}
+	permission.SetSessionMode(app.Permissions, sess.ID, mode)
 
 	type response struct {
 		result *fantasy.AgentResult
@@ -337,9 +347,11 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 			_, _ = fmt.Fprintf(os.Stderr, ansi.ResetProgressBar)
 		}
 
-		// Always print a newline at the end. If output is a TTY this will
-		// prevent the prompt from overwriting the last line of output.
-		_, _ = fmt.Fprintln(output)
+		// Terminate streamed output, but keep stdout empty when a run fails
+		// before producing any assistant text.
+		if printed {
+			_, _ = fmt.Fprintln(output)
+		}
 	}()
 
 	for {

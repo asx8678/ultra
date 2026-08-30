@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -106,6 +107,10 @@ type coordinator struct {
 	skillTracker *skills.Tracker
 
 	readyWg errgroup.Group
+
+	runtimeMu               sync.Mutex
+	runtimeConfigGeneration uint64
+	runtimeMCPGeneration    uint64
 }
 
 // CoordinatorOptions holds the dependencies for NewCoordinator. Using a
@@ -175,6 +180,8 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	}
 	c.currentAgent = agent
 	c.agents[config.AgentCoder] = agent
+	c.runtimeConfigGeneration = c.cfg.RuntimeGeneration()
+	c.runtimeMCPGeneration = mcp.ToolGeneration()
 	return c, nil
 }
 
@@ -220,9 +227,9 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		}
 	}
 
-	// refresh models before each run
-	if err := c.UpdateModels(ctx); err != nil {
-		return nil, fmt.Errorf("failed to update models: %w", err)
+	// Rebuild only when configuration or the MCP tool generation changed.
+	if err := c.ensureRuntime(ctx); err != nil {
+		return nil, fmt.Errorf("failed to update runtime: %w", err)
 	}
 
 	model := c.currentAgent.Model()
@@ -762,6 +769,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	// per delegated turn. The top-level invocation of the sub-agent tool
 	// itself is still wrapped from the coder's side.
 	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
+	filteredTools = wrapToolsWithPolicy(filteredTools, c.permissions)
 
 	return filteredTools, nil
 }
@@ -799,8 +807,25 @@ func (c *coordinator) Model() Model {
 	return c.currentAgent.Model()
 }
 
+func (c *coordinator) ensureRuntime(ctx context.Context) error {
+	configGeneration := c.cfg.RuntimeGeneration()
+	mcpGeneration := mcp.ToolGeneration()
+
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	if c.runtimeConfigGeneration == configGeneration && c.runtimeMCPGeneration == mcpGeneration {
+		return nil
+	}
+	return c.updateModelsLocked(ctx, configGeneration, mcpGeneration)
+}
+
 func (c *coordinator) UpdateModels(ctx context.Context) error {
-	// build the models again so we make sure we get the latest config
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	return c.updateModelsLocked(ctx, c.cfg.RuntimeGeneration(), mcp.ToolGeneration())
+}
+
+func (c *coordinator) updateModelsLocked(ctx context.Context, configGeneration, mcpGeneration uint64) error {
 	large, small, err := c.buildAgentModels(ctx, false)
 	if err != nil {
 		return err
@@ -817,6 +842,8 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 		return err
 	}
 	c.currentAgent.SetTools(tools)
+	c.runtimeConfigGeneration = configGeneration
+	c.runtimeMCPGeneration = mcpGeneration
 	return nil
 }
 

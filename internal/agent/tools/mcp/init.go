@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/asx8678/ultra/internal/config"
@@ -48,12 +49,13 @@ func (s *ClientSession) Close() error {
 }
 
 var (
-	sessions = csync.NewMap[string, *ClientSession]()
-	states   = csync.NewMap[string, ClientInfo]()
-	authURLs = csync.NewMap[string, *mcpoauth.Handler]()
-	broker   = pubsub.NewBroker[Event]()
-	initOnce sync.Once
-	initDone = make(chan struct{})
+	sessions       = csync.NewMap[string, *ClientSession]()
+	states         = csync.NewMap[string, ClientInfo]()
+	authURLs       = csync.NewMap[string, *mcpoauth.Handler]()
+	broker         = pubsub.NewBroker[Event]()
+	initOnce       sync.Once
+	initDone       = make(chan struct{})
+	toolGeneration atomic.Uint64
 
 	// initStarted records whether Initialize has been armed. WaitForInit only
 	// blocks once initialization is expected; coordinators built outside app
@@ -239,6 +241,12 @@ func SubscribeEvents(ctx context.Context) <-chan pubsub.Event[Event] {
 // GetStates returns the current state of all MCP clients
 func GetStates() map[string]ClientInfo {
 	return states.Copy()
+}
+
+// ToolGeneration changes whenever MCP state or its advertised tool list may
+// have changed. Runtime snapshots use it to rebuild toolsets only when needed.
+func ToolGeneration() uint64 {
+	return toolGeneration.Load()
 }
 
 // GetState returns the state of a specific MCP client
@@ -901,6 +909,7 @@ func updateState(name string, state State, err error, client *ClientSession, cou
 		info.Client = nil
 	}
 	states.Set(name, info)
+	toolGeneration.Add(1)
 
 	// Publish state change event
 	broker.Publish(pubsub.UpdatedEvent, Event{
@@ -954,6 +963,7 @@ func createSession(ctx context.Context, cfg *config.ConfigStore, name string, m 
 	opts := &mcp.ClientOptions{}
 	if !m.IsSessionless(resolver) {
 		opts.ToolListChangedHandler = func(context.Context, *mcp.ToolListChangedRequest) {
+			toolGeneration.Add(1)
 			broker.Publish(pubsub.UpdatedEvent, Event{
 				Type: EventToolsListChanged,
 				Name: name,

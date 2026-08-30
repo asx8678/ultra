@@ -18,6 +18,7 @@ import (
 	"github.com/asx8678/ultra/internal/csync"
 	"github.com/asx8678/ultra/internal/env"
 	"github.com/asx8678/ultra/internal/oauth"
+	"github.com/asx8678/ultra/internal/toolmeta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -824,7 +825,7 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, allToolNames(), coderAgent.AllowedTools)
+	assert.Equal(t, toolmeta.DefaultNames(), coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)

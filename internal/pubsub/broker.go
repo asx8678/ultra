@@ -32,12 +32,11 @@ import (
 )
 
 const (
-	// bufferSize is the per-subscriber channel capacity for any broker
-	// created via NewBroker. Publish is non-blocking, so a full buffer
-	// drops events (with a warning log); sized to cover a long
-	// streaming assistant turn (~one UpdatedEvent per token) even under
-	// TUI render stalls.
-	bufferSize = 4096
+	// bufferSize is the conservative default per-subscriber capacity.
+	// Streaming updates are checkpointed and no longer publish one event per
+	// token, so retaining thousands of complete message snapshots merely
+	// amplifies memory use under a slow consumer.
+	bufferSize = 256
 
 	// defaultMustDeliverTimeout is the per-subscriber upper bound on how
 	// long [Broker.PublishMustDeliver] will block waiting for buffer

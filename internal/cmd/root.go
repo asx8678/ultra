@@ -28,6 +28,7 @@ import (
 	"github.com/asx8678/ultra/internal/db"
 	"github.com/asx8678/ultra/internal/lock"
 	ultralog "github.com/asx8678/ultra/internal/log"
+	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/projects"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/server"
@@ -262,8 +263,19 @@ func setupWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error) {
 // setupLocalWorkspace creates an in-process app.App and wraps it in an
 // AppWorkspace.
 func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error) {
+	return setupLocalWorkspaceWithProfile(cmd, app.InteractiveProfile())
+}
+
+func setupLocalWorkspaceWithProfile(cmd *cobra.Command, profile app.RuntimeProfile) (workspace.Workspace, func(), error) {
 	debug, _ := cmd.Flags().GetBool("debug")
 	yolo, _ := cmd.Flags().GetBool("yolo")
+	permissionMode := ""
+	if cmd.Flags().Lookup("permission-mode") != nil {
+		permissionMode, _ = cmd.Flags().GetString("permission-mode")
+	}
+	if yolo {
+		permissionMode = string(permission.ModeYolo)
+	}
 	channels, _ := cmd.Flags().GetStringSlice("channels")
 	dataDir, _ := cmd.Flags().GetString("data-dir")
 	ctx := cmd.Context()
@@ -279,7 +291,8 @@ func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error
 	}
 
 	cfg := store.Config()
-	store.Overrides().SkipPermissionRequests = yolo
+	store.Overrides().SkipPermissionRequests = yolo || permissionMode == string(permission.ModeYolo)
+	store.Overrides().PermissionMode = permissionMode
 	store.Overrides().EnabledChannels = channels
 
 	if err := os.MkdirAll(cfg.Options.DataDirectory, 0o700); err != nil {
@@ -318,7 +331,7 @@ func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error
 		skills.WithWorkingDir(discoveryCfg.WorkingDir),
 	)
 
-	appInstance, err := app.New(ctx, conn, store, skillsMgr)
+	appInstance, err := app.NewWithProfile(ctx, conn, store, skillsMgr, profile)
 	if err != nil {
 		_ = conn.Close()
 		slog.Error("Failed to create app instance", "error", err)

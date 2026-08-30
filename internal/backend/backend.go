@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -193,9 +194,10 @@ type Workspace struct {
 	// closing is set by Shutdown so no new runs are accepted once
 	// teardown has begun. runWG tracks dispatched agent goroutines
 	// so Shutdown can wait for them to return before app cleanup.
-	runMu   sync.Mutex
-	closing bool
-	runWG   sync.WaitGroup
+	runMu            sync.Mutex
+	closing          bool
+	runWG            sync.WaitGroup
+	agentInteractive atomic.Bool
 
 	// clientsMu guards clients. It is held only briefly (no IO).
 	clientsMu sync.Mutex
@@ -440,7 +442,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 		skills.WithWorkingDir(discoveryCfg.WorkingDir),
 	)
 
-	appWorkspace, err := app.New(b.ctx, conn, cfg, skillsMgr)
+	appWorkspace, err := app.NewWithProfile(b.ctx, conn, cfg, skillsMgr, app.ServerProfile())
 	if err != nil {
 		return nil, proto.Workspace{}, fmt.Errorf("failed to create app workspace: %w", err)
 	}

@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,31 @@ func hookApproved(ctx context.Context, toolCallID string) bool {
 	}
 	v, _ := ctx.Value(hookApprovalKey{}).(string)
 	return v == toolCallID
+}
+
+// Mode controls how a non-interactive session resolves permission requests.
+type Mode string
+
+const (
+	ModeAsk         Mode = "ask"
+	ModeReadOnly    Mode = "read-only"
+	ModeAcceptEdits Mode = "accept-edits"
+	ModeYolo        Mode = "yolo"
+)
+
+// ErrApprovalRequired indicates that a headless ask policy cannot resolve a
+// permission request without an interactive frontend.
+var ErrApprovalRequired = errors.New("permission approval requires an interactive frontend")
+
+// ParseMode validates a permission mode.
+func ParseMode(value string) (Mode, bool) {
+	mode := Mode(value)
+	switch mode {
+	case ModeAsk, ModeReadOnly, ModeAcceptEdits, ModeYolo:
+		return mode, true
+	default:
+		return "", false
+	}
 }
 
 type CreatePermissionRequest struct {
@@ -101,6 +127,8 @@ type permissionService struct {
 	pendingRequests       *csync.Map[string, chan bool]
 	autoApproveSessions   map[string]bool
 	autoApproveSessionsMu sync.RWMutex
+	sessionModes          map[string]Mode
+	sessionModesMu        sync.RWMutex
 	skip                  atomic.Bool
 	allowedTools          []string
 
@@ -201,6 +229,19 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		return true, nil
 	}
 
+	if mode, ok := s.sessionMode(opts.SessionID); ok {
+		if mode == ModeAsk {
+			return false, ErrApprovalRequired
+		}
+		granted := mode == ModeYolo || mode == ModeAcceptEdits && isEditTool(opts.ToolName)
+		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+			ToolCallID: opts.ToolCallID,
+			Granted:    granted,
+			Denied:     !granted,
+		})
+		return granted, nil
+	}
+
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 
@@ -277,6 +318,43 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	}
 }
 
+func isEditTool(name string) bool {
+	switch name {
+	case "edit", "multiedit", "write", "lsp_rename", "lsp_replace_symbol":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *permissionService) sessionMode(sessionID string) (Mode, bool) {
+	s.sessionModesMu.RLock()
+	defer s.sessionModesMu.RUnlock()
+	mode, ok := s.sessionModes[sessionID]
+	return mode, ok
+}
+
+func (s *permissionService) setSessionMode(sessionID string, mode Mode) {
+	s.sessionModesMu.Lock()
+	s.sessionModes[sessionID] = mode
+	s.sessionModesMu.Unlock()
+}
+
+// SetSessionMode applies a non-interactive policy when the service supports it.
+func SetSessionMode(service Service, sessionID string, mode Mode) {
+	if setter, ok := service.(interface{ setSessionMode(string, Mode) }); ok {
+		setter.setSessionMode(sessionID, mode)
+	}
+}
+
+// SessionMode returns the explicit policy for sessionID, if one exists.
+func SessionMode(service Service, sessionID string) (Mode, bool) {
+	if getter, ok := service.(interface{ sessionMode(string) (Mode, bool) }); ok {
+		return getter.sessionMode(sessionID)
+	}
+	return "", false
+}
+
 func (s *permissionService) AutoApproveSession(sessionID string) {
 	s.autoApproveSessionsMu.Lock()
 	s.autoApproveSessions[sessionID] = true
@@ -302,6 +380,7 @@ func NewPermissionService(workingDir string, skip bool, allowedTools []string) S
 		workingDir:          workingDir,
 		sessionPermissions:  csync.NewMap[PermissionKey, bool](),
 		autoApproveSessions: make(map[string]bool),
+		sessionModes:        make(map[string]Mode),
 		allowedTools:        allowedTools,
 		pendingRequests:     csync.NewMap[string, chan bool](),
 	}

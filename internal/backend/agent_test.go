@@ -11,6 +11,7 @@ import (
 	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/app"
 	"github.com/asx8678/ultra/internal/message"
+	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/stretchr/testify/require"
 )
@@ -78,6 +79,20 @@ func insertAgentWorkspace(t *testing.T, b *Backend, coord agent.Coordinator) *Wo
 	b.pathIndex[ws.resolvedPath] = ws.ID
 	b.mu.Unlock()
 	return ws
+}
+
+func TestSendMessage_HeadlessLegacyClientDefaultsReadOnly(t *testing.T) {
+	t.Parallel()
+	b, _ := newTestBackend(t)
+	coord := newBlockingCoordinator()
+	ws := insertAgentWorkspace(t, b, coord)
+	ws.Permissions = permission.NewPermissionService(ws.Path, false, nil)
+
+	require.NoError(t, b.SendMessage(ws.ID, proto.AgentMessage{SessionID: "S1", Prompt: "hi"}))
+	mode, ok := permission.SessionMode(ws.Permissions, "S1")
+	require.True(t, ok)
+	require.Equal(t, permission.ModeReadOnly, mode)
+	close(coord.release)
 }
 
 func TestSendMessage_WorkspaceNotFound(t *testing.T) {

@@ -111,7 +111,7 @@ tasks:
     env:
       ULTRA_PROFILE: true
     cmds:
-      - go run .
+      - go run -tags profile .
 
   install:
     desc: Install the application

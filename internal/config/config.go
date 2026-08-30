@@ -17,6 +17,7 @@ import (
 	"github.com/asx8678/ultra/internal/discover"
 	"github.com/asx8678/ultra/internal/oauth"
 	"github.com/asx8678/ultra/internal/oauth/copilot"
+	"github.com/asx8678/ultra/internal/toolmeta"
 	"github.com/invopop/jsonschema"
 )
 
@@ -864,40 +865,6 @@ func (c *Config) SmallModel() *catwalk.Model {
 
 const maxRecentModelsPerType = 5
 
-func allToolNames() []string {
-	return []string{
-		"agent",
-		"bash",
-		"ultra_info",
-		"ultra_logs",
-		"job_output",
-		"job_kill",
-		"download",
-		"edit",
-		"multiedit",
-		"lsp_diagnostics",
-		"lsp_references",
-		"lsp_restart",
-		"lsp_symbols",
-		"lsp_definition",
-		"lsp_call_hierarchy",
-		"lsp_rename",
-		"lsp_replace_symbol",
-		"fetch",
-		"agentic_fetch",
-		"glob",
-		"grep",
-		"ls",
-		"question",
-		"sourcegraph",
-		"todos",
-		"view",
-		"write",
-		"list_mcp_resources",
-		"read_mcp_resource",
-	}
-}
-
 func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 	if disabledTools == nil {
 		return allTools
@@ -906,10 +873,8 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 	return filterSlice(allTools, disabledTools, false)
 }
 
-func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
-	// filter to only include tools that are in allowedtools (include mode)
-	return filterSlice(tools, readOnlyTools, true)
+func resolveTaskTools(tools []string) []string {
+	return filterSlice(tools, toolmeta.TaskDefaultNames(), true)
 }
 
 func filterSlice(data []string, mask []string, include bool) []string {
@@ -925,7 +890,7 @@ func filterSlice(data []string, mask []string, include bool) []string {
 }
 
 func (c *Config) SetupAgents() {
-	allowedTools := resolveAllowedTools(allToolNames(), c.Options.DisabledTools)
+	allowedTools := resolveAllowedTools(toolmeta.DefaultNames(), c.Options.DisabledTools)
 
 	agents := map[string]Agent{
 		AgentCoder: {
@@ -943,7 +908,7 @@ func (c *Config) SetupAgents() {
 			Description:  "An agent that helps with searching for context and finding implementation details.",
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
-			AllowedTools: resolveReadOnlyTools(allowedTools),
+			AllowedTools: resolveTaskTools(allowedTools),
 			// NO MCPs or LSPs by default
 			AllowedMCP: map[string][]string{},
 		},

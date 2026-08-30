@@ -125,10 +125,11 @@ func (a AgentInfo) IsZero() bool {
 // omitted value before accepting the request, so every resulting turn and
 // terminal event has an identity.
 type AgentMessage struct {
-	SessionID   string       `json:"session_id"`
-	RunID       string       `json:"run_id"`
-	Prompt      string       `json:"prompt"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	SessionID      string       `json:"session_id"`
+	RunID          string       `json:"run_id"`
+	Prompt         string       `json:"prompt"`
+	PermissionMode string       `json:"permission_mode,omitempty"`
+	Attachments    []Attachment `json:"attachments,omitempty"`
 }
 
 // ShellCommandRequest represents a request to run a shell command directly.

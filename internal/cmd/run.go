@@ -13,9 +13,11 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/asx8678/ultra/internal/agent"
+	"github.com/asx8678/ultra/internal/app"
 	"github.com/asx8678/ultra/internal/client"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/asx8678/ultra/internal/format"
+	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/asx8678/ultra/internal/session"
@@ -67,7 +69,16 @@ ultra run --continue "Follow up on your last response"
 			smallModel, _ = cmd.Flags().GetString("small-model")
 			sessionID, _  = cmd.Flags().GetString("session")
 			useLast, _    = cmd.Flags().GetBool("continue")
+			modeValue, _  = cmd.Flags().GetString("permission-mode")
 		)
+
+		mode, ok := permission.ParseMode(modeValue)
+		if !ok {
+			return fmt.Errorf("invalid permission mode %q", modeValue)
+		}
+		if yolo, _ := cmd.Flags().GetBool("yolo"); yolo {
+			mode = permission.ModeYolo
+		}
 
 		// Cancel on SIGINT or SIGTERM. os.Kill cannot be intercepted.
 		ctx, cancel := signal.NotifyContext(context.Background(), addSignals([]os.Signal{os.Interrupt})...)
@@ -102,6 +113,9 @@ ultra run --continue "Follow up on your last response"
 			}
 
 			clientWs := workspace.NewClientWorkspace(c, *ws)
+			if mode == permission.ModeYolo {
+				clientWs.PermissionSetSkipRequests(true)
+			}
 			if err := clientWs.InitCoderAgentNonInteractive(ctx); err != nil {
 				return fmt.Errorf("failed to initialize agent: %w", err)
 			}
@@ -118,10 +132,10 @@ ultra run --continue "Follow up on your last response"
 				slog.SetDefault(slog.New(log.New(os.Stderr)))
 			}
 
-			return runNonInteractive(ctx, c, ws, prompt, largeModel, smallModel, quiet || verbose, sessionID, useLast)
+			return runNonInteractive(ctx, c, ws, prompt, largeModel, smallModel, quiet || verbose, sessionID, useLast, mode)
 		}
 
-		ws, cleanup, err := setupLocalWorkspace(cmd)
+		ws, cleanup, err := setupLocalWorkspaceWithProfile(cmd, app.CodeProfile())
 		if err != nil {
 			return err
 		}
@@ -156,6 +170,7 @@ func init() {
 	runCmd.Flags().String("small-model", "", "Small model to use. If not provided, uses the default small model for the provider")
 	runCmd.Flags().StringP("session", "s", "", "Continue a previous session by ID")
 	runCmd.Flags().BoolP("continue", "C", false, "Continue the most recent session")
+	runCmd.Flags().String("permission-mode", string(permission.ModeReadOnly), "Permission policy: ask, read-only, accept-edits, or yolo")
 	runCmd.MarkFlagsMutuallyExclusive("session", "continue")
 }
 
@@ -169,6 +184,7 @@ func runNonInteractive(
 	hideSpinner bool,
 	continueSessionID string,
 	useLast bool,
+	permissionMode permission.Mode,
 ) error {
 	slog.Info("Running in non-interactive mode")
 
@@ -216,11 +232,6 @@ func runNonInteractive(
 		return fmt.Errorf("agent not ready: %w", err)
 	}
 
-	// Force-update agent models so MCP tools are loaded.
-	if err := c.UpdateAgent(ctx, ws.ID); err != nil {
-		slog.Warn("Failed to update agent", "error", err)
-	}
-
 	defer stopSpinner()
 
 	sess, err := resolveSession(ctx, c, ws.ID, continueSessionID, useLast)
@@ -252,7 +263,7 @@ func runNonInteractive(
 	// loop would exit on whichever RunComplete arrived first for
 	// the same session and drop the queued prompt's output.
 	runID := uuid.New().String()
-	if err := c.SendMessage(ctx, ws.ID, sess.ID, runID, prompt); err != nil {
+	if err := c.SendMessageWithPermissionMode(ctx, ws.ID, sess.ID, runID, prompt, permissionMode); err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
@@ -267,7 +278,9 @@ func runNonInteractive(
 		if progress && stderrTTY {
 			_, _ = fmt.Fprintf(os.Stderr, ansi.ResetProgressBar)
 		}
-		_, _ = fmt.Fprintln(os.Stdout)
+		if stream.printed {
+			_, _ = fmt.Fprintln(os.Stdout)
+		}
 	}()
 
 	for {

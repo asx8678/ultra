@@ -8,6 +8,7 @@ import (
 	"github.com/asx8678/ultra/internal/agent"
 	"github.com/asx8678/ultra/internal/agent/notify"
 	"github.com/asx8678/ultra/internal/config"
+	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/proto"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/asx8678/ultra/internal/shell"
@@ -49,6 +50,13 @@ func (b *Backend) SendMessage(workspaceID string, msg proto.AgentMessage) error 
 	// turn identity before reserving and dispatching it so notifications and
 	// terminal fallback events are always attributable to one submission.
 	msg.RunID = agent.EnsureRunID(msg.RunID)
+	if mode, ok := permission.ParseMode(msg.PermissionMode); ok {
+		permission.SetSessionMode(ws.Permissions, msg.SessionID, mode)
+	} else if !ws.agentInteractive.Load() {
+		// Older headless clients omitted the policy. Fail closed instead of
+		// waiting forever for a permission UI that does not exist.
+		permission.SetSessionMode(ws.Permissions, msg.SessionID, permission.ModeReadOnly)
+	}
 
 	accept := ws.AgentCoordinator.BeginAccepted(msg.SessionID)
 
@@ -150,6 +158,7 @@ func (b *Backend) InitAgent(ctx context.Context, workspaceID string, interactive
 		return err
 	}
 
+	ws.agentInteractive.Store(interactive)
 	if interactive {
 		return ws.InitCoderAgent(ctx)
 	}
