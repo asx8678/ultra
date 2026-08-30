@@ -33,3 +33,24 @@ func TestFormatTokensAndCostOmitsEstimatedPrefix(t *testing.T) {
 	require.Contains(t, actual, "12%")
 	require.NotContains(t, actual, "~12%")
 }
+
+func TestModelInfoDoesNotMistakeViaInModelNameForProvider(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	rendered := ModelInfo(
+		&sty,
+		"Model via Gateway With A Long Name",
+		"Provider",
+		"",
+		nil,
+		20,
+		nil,
+	)
+	plain := ansi.Strip(rendered)
+
+	require.Contains(t, plain, "via Provider")
+	for _, line := range strings.Split(rendered, "\n") {
+		require.LessOrEqual(t, ansi.StringWidth(line), 20)
+	}
+}

@@ -219,10 +219,11 @@ func (w *ClientWorkspace) ListAllUserMessages(ctx context.Context) ([]message.Me
 // -- Agent --
 
 func (w *ClientWorkspace) AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error {
-	// The interactive TUI does not consume notify.RunComplete for
-	// completion detection (it observes message events directly),
-	// so passing an empty RunID is correct here: it skips the
-	// correlator stamping path without functional consequences.
+	// The interactive TUI consumes notify.RunComplete as a terminal UI
+	// state edge, but it does not use it for per-request completion
+	// detection (message events still drive the chat). Passing an empty
+	// RunID is therefore correct here: the session ID is sufficient for
+	// refreshing busy/queue state and cancellation feedback.
 	return w.client.SendMessage(ctx, w.workspaceID(), sessionID, "", prompt, attachments...)
 }
 
@@ -1187,9 +1188,9 @@ func (w *ClientWorkspace) translateEvent(ev any) tea.Msg {
 		// Translate the wire-level proto.RunComplete back into the
 		// agent's domain notify.RunComplete. Without this case the
 		// default branch below warns on every run completion in the
-		// server-mode TUI, even though the TUI itself doesn't act
-		// on RunComplete — converting silently keeps the workspace
-		// event bridge symmetric with the server-side wrapEvent.
+		// server-mode TUI. Converting it lets the TUI refresh busy/queue
+		// state and report cancellation while keeping the workspace event
+		// bridge symmetric with the server-side wrapEvent.
 		return pubsub.Event[notify.RunComplete]{
 			Type: e.Type,
 			Payload: notify.RunComplete{

@@ -26,9 +26,10 @@ const (
 
 	ArrowRightIcon string = "→"
 
-	ToolPending string = "●"
-	ToolSuccess string = "✓"
-	ToolError   string = "×"
+	ToolPending   string = "●"
+	ToolSuccess   string = "✓"
+	ToolError     string = "×"
+	ToolCancelled string = "■"
 
 	RadioOn  string = "◉"
 	RadioOff string = "○"
@@ -78,6 +79,10 @@ type Styles struct {
 		Diagonals         lipgloss.Style // Style for diagonal separators (╱)
 		Percentage        lipgloss.Style // Style for context percentage
 		HypercreditIcon   lipgloss.Style // Style for Hypercredit count (◆ N)
+		ModeSafe          lipgloss.Style // Style for SAFE permission mode.
+		ModeYolo          lipgloss.Style // Style for YOLO permission mode.
+		Model             lipgloss.Style // Style for the active model name.
+		Provider          lipgloss.Style // Style for the active provider name.
 		Keystroke         lipgloss.Style // Style for keystroke hints (e.g., "ctrl+d")
 		KeystrokeTip      lipgloss.Style // Style for keystroke action text (e.g., "open", "close")
 		WorkingDir        lipgloss.Style // Style for current working directory
@@ -92,6 +97,12 @@ type Styles struct {
 		View    lipgloss.Style
 		Version lipgloss.Style
 		Title   lipgloss.Style
+	}
+
+	// Landing page identity.
+	Landing struct {
+		Tagline        lipgloss.Style
+		WorkspaceLabel lipgloss.Style
 	}
 
 	// Tool calls

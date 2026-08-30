@@ -23,23 +23,25 @@ func (m *UI) modelInfo(width int) string {
 	providerName := ""
 
 	if model != nil {
-		// Get provider name first
-		providerConfig, ok := m.com.Config().Providers.Get(model.ModelCfg.Provider)
-		if ok {
-			providerName = providerConfig.Name
+		providerName = model.ModelCfg.Provider
+		if cfg := m.com.Config(); cfg != nil && cfg.Providers != nil {
+			if providerConfig, ok := cfg.Providers.Get(model.ModelCfg.Provider); ok && providerConfig.Name != "" {
+				providerName = providerConfig.Name
+			}
+		}
 
-			// Only check reasoning if model can reason
-			if model.CatwalkCfg.CanReason {
-				if len(model.CatwalkCfg.ReasoningLevels) == 0 {
-					if model.ModelCfg.Think {
-						reasoningInfo = "Thinking On"
-					} else {
-						reasoningInfo = "Thinking Off"
-					}
+		// Reasoning capability belongs to the model and remains useful even
+		// when provider metadata is unavailable.
+		if model.CatwalkCfg.CanReason {
+			if len(model.CatwalkCfg.ReasoningLevels) == 0 {
+				if model.ModelCfg.Think {
+					reasoningInfo = "Thinking On"
 				} else {
-					reasoningEffort := cmp.Or(model.ModelCfg.ReasoningEffort, model.CatwalkCfg.DefaultReasoningEffort)
-					reasoningInfo = fmt.Sprintf("Reasoning %s", common.FormatReasoningEffort(reasoningEffort))
+					reasoningInfo = "Thinking Off"
 				}
+			} else {
+				reasoningEffort := cmp.Or(model.ModelCfg.ReasoningEffort, model.CatwalkCfg.DefaultReasoningEffort)
+				reasoningInfo = fmt.Sprintf("Reasoning %s", common.FormatReasoningEffort(reasoningEffort))
 			}
 		}
 	}
@@ -53,9 +55,9 @@ func (m *UI) modelInfo(width int) string {
 			EstimatedUsage: m.session.EstimatedUsage,
 		}
 	}
-	var modelName string
+	modelName := "No active model"
 	if model != nil {
-		modelName = model.CatwalkCfg.Name
+		modelName = cmp.Or(model.CatwalkCfg.Name, model.ModelCfg.Model)
 	}
 	return common.ModelInfo(m.com.Styles, modelName, providerName, reasoningInfo, modelContext, width, m.hyperCredits)
 }

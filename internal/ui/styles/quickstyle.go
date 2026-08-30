@@ -605,6 +605,10 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.Header.Diagonals = base.Foreground(o.primary)
 	s.Header.Percentage = muted
 	s.Header.HypercreditIcon = base.Foreground(o.secondary)
+	s.Header.ModeSafe = base.Foreground(o.successMostSubtle).Bold(true)
+	s.Header.ModeYolo = base.Foreground(o.attention).Bold(true)
+	s.Header.Model = base.Foreground(o.primary).Bold(true)
+	s.Header.Provider = subtle
 	s.Header.Keystroke = muted
 	s.Header.KeystrokeTip = subtle
 	s.Header.WorkingDir = muted
@@ -618,11 +622,14 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.CompactDetails.View = base.Padding(0, 1, 1, 1).Border(lipgloss.RoundedBorder()).BorderForeground(o.primary)
 	s.CompactDetails.Version = lipgloss.NewStyle().Foreground(o.separator)
 
+	s.Landing.Tagline = base.Foreground(o.fgMoreSubtle)
+	s.Landing.WorkspaceLabel = base.Foreground(o.primary).Bold(true)
+
 	// Tool rendering styles
 	s.Tool.IconPending = base.Foreground(o.successMostSubtle).SetString(ToolPending)
 	s.Tool.IconSuccess = base.Foreground(o.success).SetString(ToolSuccess)
 	s.Tool.IconError = base.Foreground(o.error).SetString(ToolError)
-	s.Tool.IconCancelled = muted.SetString(ToolPending)
+	s.Tool.IconCancelled = muted.SetString(ToolCancelled)
 
 	s.Tool.NameNormal = base.Foreground(o.info)
 	s.Tool.NameNested = base.Foreground(o.info)

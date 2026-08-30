@@ -5,8 +5,10 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/asx8678/ultra/internal/ui/common"
+	"github.com/asx8678/ultra/internal/ui/styles"
 	"github.com/asx8678/ultra/internal/workspace"
 	"github.com/charmbracelet/ultraviolet/layout"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // selectedLargeModel returns the currently selected large language model as
@@ -22,19 +24,37 @@ func (m *UI) selectedLargeModel() *workspace.AgentModel {
 	return nil
 }
 
-// landingView renders the landing page view showing the current working
-// directory, model information, and LSP/MCP status in a two-column layout.
+// landingView renders the Ultra workspace identity, active model, and
+// LSP/MCP/skills readiness. Resource columns stack on narrow terminals instead
+// of squeezing three unreadable panels into the same row.
 func (m *UI) landingView() string {
 	t := m.com.Styles
-	width := m.layout.main.Dx()
-	cwd := common.PrettyPath(t, m.com.Workspace.WorkingDir(), width)
-
-	parts := []string{
-		cwd,
+	width := max(0, m.layout.main.Dx())
+	if width == 0 {
+		return ""
 	}
 
-	parts = append(parts, "", m.modelInfo(width))
-	infoSection := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	brand := styles.ApplyBoldForegroundGrad(
+		t.Header.LogoGradCanvas,
+		"ULTRA",
+		t.Header.LogoGradFromColor,
+		t.Header.LogoGradToColor,
+	)
+	tagline := t.Landing.Tagline.Render("AI engineering, in your terminal.")
+	hero := ansi.Truncate(brand+"  "+tagline, width, "…")
+
+	workspaceLabel := t.Landing.WorkspaceLabel.Render("Workspace")
+	pathWidth := max(1, width-lipgloss.Width(workspaceLabel)-2)
+	cwd := common.PrettyPath(t, m.com.Workspace.WorkingDir(), pathWidth)
+	workspaceLine := ansi.Truncate(workspaceLabel+"  "+cwd, width, "…")
+
+	infoSection := lipgloss.JoinVertical(
+		lipgloss.Left,
+		hero,
+		workspaceLine,
+		"",
+		m.modelInfo(width),
+	)
 
 	var remainingHeightArea image.Rectangle
 	layout.Vertical(
@@ -42,19 +62,42 @@ func (m *UI) landingView() string {
 		layout.Fill(1),
 	).Split(m.layout.main).Assign(new(image.Rectangle), &remainingHeightArea)
 
-	mcpLspSectionWidth := min(30, (width-2)/3)
-
-	lspSection := m.lspInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-	mcpSection := m.mcpInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-	skillsSection := m.skillsInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-
-	content := lipgloss.JoinHorizontal(lipgloss.Left, lspSection, " ", mcpSection, " ", skillsSection)
-
+	content := m.landingResources(width, max(1, remainingHeightArea.Dy()))
 	return lipgloss.NewStyle().
 		Width(width).
-		Height(m.layout.main.Dy() - 1).
+		Height(max(0, m.layout.main.Dy()-1)).
 		PaddingTop(1).
-		Render(
-			lipgloss.JoinVertical(lipgloss.Left, infoSection, "", content),
-		)
+		Render(lipgloss.JoinVertical(lipgloss.Left, infoSection, "", content))
+}
+
+func (m *UI) landingResources(width, height int) string {
+	const (
+		columnGap      = 1
+		minColumnWidth = 24
+	)
+
+	if width >= 3*minColumnWidth+2*columnGap {
+		available := width - 2*columnGap
+		baseWidth := available / 3
+		remainder := available % 3
+		widths := [3]int{baseWidth, baseWidth, baseWidth}
+		for i := range remainder {
+			widths[i]++
+		}
+
+		lspSection := m.lspInfo(widths[0], height, false)
+		mcpSection := m.mcpInfo(widths[1], height, false)
+		skillsSection := m.skillsInfo(widths[2], height, false)
+		return lipgloss.JoinHorizontal(lipgloss.Top, lspSection, " ", mcpSection, " ", skillsSection)
+	}
+
+	sectionHeight := max(2, (height-2)/3)
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.lspInfo(width, sectionHeight, false),
+		"",
+		m.mcpInfo(width, sectionHeight, false),
+		"",
+		m.skillsInfo(width, sectionHeight, false),
+	)
 }

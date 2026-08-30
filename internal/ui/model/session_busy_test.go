@@ -19,6 +19,7 @@ import (
 	"github.com/asx8678/ultra/internal/ui/attachments"
 	"github.com/asx8678/ultra/internal/ui/common"
 	"github.com/asx8678/ultra/internal/ui/dialog"
+	"github.com/asx8678/ultra/internal/ui/util"
 	"github.com/asx8678/ultra/internal/workspace"
 )
 
@@ -307,6 +308,48 @@ func TestAgentTerminalNotificationsRefreshBusy(t *testing.T) {
 				"busy→idle edge must reach the cache without waiting for the TTL")
 		})
 	}
+}
+
+func TestRunCompleteRefreshesBusyQueueAndReportsCancellation(t *testing.T) {
+	pinTTLs(t)
+
+	ws := &countingWorkspace{ready: true}
+	m := newBusyUI(ws)
+	warmCaches(m, true)
+	ws.resetCounters()
+
+	_, cmd := m.Update(pubsub.Event[notify.RunComplete]{
+		Type: pubsub.UpdatedEvent,
+		Payload: notify.RunComplete{
+			SessionID: "s1",
+			Cancelled: true,
+		},
+	})
+
+	require.NotNil(t, cmd)
+	require.Zero(t, ws.syncProbes(), "RunComplete handling must not probe synchronously")
+	require.True(t, m.busyFetchInFlight, "RunComplete must schedule a busy refresh")
+	require.True(t, m.promptQueueInFlight, "RunComplete must schedule a queue refresh")
+	require.Equal(t, "Request canceled.", m.status.msg.Msg)
+	require.Equal(t, util.InfoTypeInfo, m.status.msg.Type)
+}
+
+func TestRunCompleteDoesNotMisreportOtherSessionCancellation(t *testing.T) {
+	pinTTLs(t)
+
+	ws := &countingWorkspace{ready: true}
+	m := newBusyUI(ws)
+	warmCaches(m, true)
+
+	m.Update(pubsub.Event[notify.RunComplete]{
+		Type: pubsub.UpdatedEvent,
+		Payload: notify.RunComplete{
+			SessionID: "other-session",
+			Cancelled: true,
+		},
+	})
+
+	require.True(t, m.status.msg.IsEmpty())
 }
 
 // TestSessionSwitchRefreshesQueueAndBusy: switching sessions must drop the

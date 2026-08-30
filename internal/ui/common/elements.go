@@ -45,29 +45,26 @@ func ModelInfo(t *styles.Styles, modelName, providerName, reasoningInfo string, 
 	modelIcon := t.ModelInfo.Icon.Render(styles.ModelIcon)
 	modelName = t.ModelInfo.Name.Render(modelName)
 
-	// Build first line with model name and optionally provider on the same line
-	var firstLine string
+	// Build the first line with the model and, when space permits, provider.
+	// Track fit explicitly: a model whose name contains "via" must not hide
+	// the provider fallback line.
+	firstLine := fmt.Sprintf("%s %s", modelIcon, modelName)
+	providerInline := false
 	if providerName != "" {
 		providerInfo := t.ModelInfo.Provider.Render(fmt.Sprintf("via %s", providerName))
-		modelWithProvider := fmt.Sprintf("%s %s %s", modelIcon, modelName, providerInfo)
-
-		// Check if it fits on one line
+		modelWithProvider := fmt.Sprintf("%s %s", firstLine, providerInfo)
 		if lipgloss.Width(modelWithProvider) <= width {
 			firstLine = modelWithProvider
-		} else {
-			// If it doesn't fit, put provider on next line
-			firstLine = fmt.Sprintf("%s %s", modelIcon, modelName)
+			providerInline = true
 		}
-	} else {
-		firstLine = fmt.Sprintf("%s %s", modelIcon, modelName)
 	}
+	firstLine = ansi.Truncate(firstLine, max(0, width), "…")
 
 	parts := []string{firstLine}
 
-	// If provider didn't fit on first line, add it as second line
-	if providerName != "" && !strings.Contains(firstLine, "via") {
-		providerInfo := fmt.Sprintf("via %s", providerName)
-		parts = append(parts, t.ModelInfo.ProviderFallback.Render(providerInfo))
+	if providerName != "" && !providerInline {
+		providerInfo := t.ModelInfo.ProviderFallback.Render(fmt.Sprintf("via %s", providerName))
+		parts = append(parts, ansi.Truncate(providerInfo, max(0, width), "…"))
 	}
 
 	if reasoningInfo != "" {

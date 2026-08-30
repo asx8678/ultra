@@ -725,6 +725,27 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.handleAgentNotification(msg.Payload); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case pubsub.Event[notify.RunComplete]:
+		// RunComplete is the authoritative terminal edge. Refresh the
+		// memoized busy and queue state off-thread so cancel and queue UX
+		// settle immediately rather than waiting for the TTL backstop.
+		m.invalidateBusyCaches()
+		m.invalidatePromptQueue()
+		if cmd := m.dispatchBusyRefresh(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.dispatchPromptQueueRefresh(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if msg.Payload.Cancelled && msg.Payload.SessionID == m.currentSessionID() {
+			info := util.InfoMsg{
+				Type: util.InfoTypeInfo,
+				Msg:  "Request canceled.",
+				TTL:  DefaultStatusTTL,
+			}
+			m.status.SetInfoMsg(info)
+			cmds = append(cmds, clearInfoMsgCmd(info.TTL))
+		}
 	case busyStateMsg:
 		cmds = append(cmds, m.applyBusyState(msg)...)
 	case promptQueueMsg:
@@ -2943,6 +2964,7 @@ func (m *UI) drawHeader(scr uv.Screen, area uv.Rectangle) {
 		scr,
 		area,
 		m.session,
+		m.selectedLargeModel(),
 		m.isCompact,
 		m.detailsOpen,
 		area.Dx(),
