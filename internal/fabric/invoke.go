@@ -80,7 +80,7 @@ type ApprovalController interface {
 
 // BudgetLedger bounds nested calls independently of provider behavior.
 type BudgetLedger interface {
-	ChargeNestedCall(string) error
+	ChargeNestedCall(string, ActionDescriptor) error
 }
 
 // InvocationEndedEvent lets a provider observe the outer call's terminal state.
@@ -135,6 +135,7 @@ func (r *Registry) Invoke(ctx context.Context, request InvokeRequest) (result JS
 		ctx = context.Background()
 	}
 	args := cloneJSONObject(request.Args)
+	request.Invocation.ensureState()
 	trace := request.Trace
 	if trace == nil {
 		trace = NewTraceRecorder()
@@ -177,7 +178,7 @@ func (r *Registry) Invoke(ctx context.Context, request InvokeRequest) (result JS
 
 	if request.Budgets != nil {
 		stage = FailureGuard
-		if chargeErr := request.Budgets.ChargeNestedCall(request.Ref); chargeErr != nil {
+		if chargeErr := request.Budgets.ChargeNestedCall(request.Ref, cloneDescriptor(binding.descriptor)); chargeErr != nil {
 			err = &InvocationError{Ref: request.Ref, Stage: stage, Err: fmt.Errorf("%w: %v", ErrBudgetExhausted, chargeErr)}
 			return nil, err
 		}
@@ -217,6 +218,7 @@ func (r *Registry) Invoke(ctx context.Context, request InvokeRequest) (result JS
 		}
 		prepared = cloneJSONObject(prepared)
 	}
+	handle.SetArgs(prepared)
 
 	stage = FailureValidate
 	if validationErr := ValidateJSON(prepared, request.Limits); validationErr != nil {

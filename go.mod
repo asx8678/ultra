@@ -37,6 +37,7 @@ require (
 	github.com/disintegration/imaging v1.6.2
 	github.com/dop251/goja v0.0.0-20260826204918-8f1c0696a37b
 	github.com/dustin/go-humanize v1.0.1
+	github.com/evanw/esbuild v0.25.12
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/invopop/jsonschema v0.14.0
 	github.com/itchyny/gojq v0.12.19

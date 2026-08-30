@@ -832,6 +832,23 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 	assert.Equal(t, []string{"lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
 }
 
+func TestConfig_setupAgentsFabricRequiresExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	disabled := &Config{Options: &Options{}}
+	disabled.SetupAgents()
+	require.NotContains(t, disabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
+
+	enabled := &Config{Options: &Options{Fabric: &FabricOptions{Enabled: true}}}
+	enabled.SetupAgents()
+	require.Contains(t, enabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
+	require.NotContains(t, enabled.Agents[AgentTask].AllowedTools, "fabric_exec")
+
+	enabled.Options.DisabledTools = []string{"fabric_exec"}
+	enabled.SetupAgents()
+	require.NotContains(t, enabled.Agents[AgentCoder].AllowedTools, "fabric_exec")
+}
+
 func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 	cfg := &Config{
 		Options: &Options{

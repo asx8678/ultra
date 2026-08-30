@@ -28,11 +28,9 @@ type FabricExecParams struct {
 	Code             string            `json:"code" description:"TypeScript program to check and execute"`
 	Strings          map[string]string `json:"strings,omitempty" description:"Named literal strings exposed read-only to the guest"`
 	TimeoutMS        int64             `json:"timeout_ms,omitempty" description:"Execution timeout in milliseconds"`
-	MemoryLimitBytes int64             `json:"memory_limit_bytes,omitempty" description:"Sandbox memory ceiling in bytes"`
-	TokenBudget      int64             `json:"token_budget,omitempty" description:"Nested model token budget"`
+	MemoryLimitBytes int64             `json:"memory_limit_bytes,omitempty" description:"Best-effort sandbox memory budget in bytes"`
 	AgentBudget      int               `json:"agent_budget,omitempty" description:"Nested agent-call budget"`
 	CapabilityViewID string            `json:"capability_view_id,omitempty" description:"Committed capability view"`
-	IdempotencyKey   string            `json:"idempotency_key,omitempty" description:"Caller idempotency key"`
 	ResultMaxBytes   int               `json:"result_max_bytes,omitempty" description:"Maximum result bytes"`
 	Display          FabricExecDisplay `json:"display,omitempty" description:"Optional display hints"`
 }
@@ -49,6 +47,9 @@ func NewFabricExecTool(executor FabricExecutor, hostID, cwd string) fantasy.Agen
 		FabricExecToolName,
 		fabricExecDescription,
 		func(ctx context.Context, params FabricExecParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			if err := validateFabricExecParams(params); err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
 			if executor == nil {
 				return fantasy.NewTextErrorResponse("Fabric runtime is unavailable"), nil
 			}
@@ -56,10 +57,10 @@ func NewFabricExecTool(executor FabricExecutor, hostID, cwd string) fantasy.Agen
 				Code: params.Code, Strings: params.Strings,
 				Timeout:          time.Duration(params.TimeoutMS) * time.Millisecond,
 				MemoryLimitBytes: params.MemoryLimitBytes,
-				TokenBudget:      params.TokenBudget, AgentBudget: params.AgentBudget,
-				CapabilityViewID: params.CapabilityViewID, IdempotencyKey: params.IdempotencyKey,
-				ResultMaxBytes: params.ResultMaxBytes,
-				DisplayTitle:   params.Display.Title, DisplayCompact: params.Display.Compact,
+				AgentBudget:      params.AgentBudget,
+				CapabilityViewID: params.CapabilityViewID,
+				ResultMaxBytes:   params.ResultMaxBytes,
+				DisplayTitle:     params.Display.Title, DisplayCompact: params.Display.Compact,
 			}, fabric.OuterInvocationContext{
 				ExecutionID: call.ID, ParentToolCallID: call.ID,
 				SessionID: GetSessionFromContext(ctx), CWD: cwd, HostID: hostID,
@@ -74,4 +75,21 @@ func NewFabricExecTool(executor FabricExecutor, hostID, cwd string) fantasy.Agen
 			return fantasy.NewTextResponse(string(encoded)), nil
 		},
 	)
+}
+
+func validateFabricExecParams(params FabricExecParams) error {
+	maxTimeoutMS := int64(fabric.MaxExecutionTimeout / time.Millisecond)
+	if params.TimeoutMS < 0 || params.TimeoutMS > maxTimeoutMS {
+		return fmt.Errorf("fabric timeout_ms must be between 0 and %d", maxTimeoutMS)
+	}
+	if params.MemoryLimitBytes < 0 || params.MemoryLimitBytes > fabric.MaxMemoryBytes {
+		return fmt.Errorf("fabric memory_limit_bytes must be between 0 and %d", fabric.MaxMemoryBytes)
+	}
+	if params.AgentBudget < 0 || params.AgentBudget > fabric.MaxAgentBudget {
+		return fmt.Errorf("fabric agent_budget must be between 0 and %d", fabric.MaxAgentBudget)
+	}
+	if params.ResultMaxBytes < 0 || params.ResultMaxBytes > fabric.DefaultJSONLimits().MaxBytes {
+		return fmt.Errorf("fabric result_max_bytes must be between 0 and %d", fabric.DefaultJSONLimits().MaxBytes)
+	}
+	return nil
 }

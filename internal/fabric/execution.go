@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -52,6 +53,7 @@ type SandboxExecutionRequest struct {
 	Timeout          time.Duration
 	MemoryLimitBytes int64
 	MaxLogBytes      int
+	Bindings         []CapabilityBinding
 	Bridge           SandboxBridge
 }
 
@@ -103,6 +105,17 @@ type FabricExecResult struct {
 	Trace       ExecutionTrace      `json:"trace"`
 }
 
+const (
+	// MaxSourceBytes bounds one model-generated Fabric program.
+	MaxSourceBytes = 1 << 20
+	// MaxExecutionTimeout prevents model-selected executions from running indefinitely.
+	MaxExecutionTimeout = 5 * time.Minute
+	// MaxMemoryBytes is the largest sandbox memory budget a caller may request.
+	MaxMemoryBytes = 256 << 20
+	// MaxAgentBudget bounds nested agent launches requested by one execution.
+	MaxAgentBudget = 16
+)
+
 // ExecutionService runs checked source against one pinned registry view.
 type ExecutionService struct {
 	Registry   *Registry
@@ -128,6 +141,11 @@ func (s *ExecutionService) Execute(
 	}
 	if s == nil || s.Registry == nil || s.Compiler == nil || s.Sandbox == nil {
 		result.Error = "Fabric execution service is not fully configured"
+		result.Trace = trace.Seal(result.Outcome, result.Error)
+		return result
+	}
+	if err := s.validateExecutionRequest(request); err != nil {
+		result.Error = err.Error()
 		result.Trace = trace.Seal(result.Outcome, result.Error)
 		return result
 	}
@@ -164,7 +182,7 @@ func (s *ExecutionService) Execute(
 	}
 	if len(compiled.Diagnostics) > 0 {
 		result.Diagnostics = append([]ProgramDiagnostic(nil), compiled.Diagnostics...)
-		result.Error = "Fabric program did not pass type checking"
+		result.Error = "Fabric program did not pass compilation checks"
 		result.Trace = trace.Seal(result.Outcome, result.Error)
 		return result
 	}
@@ -180,6 +198,7 @@ func (s *ExecutionService) Execute(
 		view:    view,
 		outer:   outer,
 		trace:   trace,
+		budgets: newExecutionBudget(request.AgentBudget, s.Budgets),
 	}
 	trace.Phase("execute")
 	sandboxResult, sandboxErr := s.Sandbox.Execute(executionCtx, SandboxExecutionRequest{
@@ -190,6 +209,7 @@ func (s *ExecutionService) Execute(
 		Timeout:          timeout,
 		MemoryLimitBytes: request.MemoryLimitBytes,
 		MaxLogBytes:      64 << 10,
+		Bindings:         view.Bindings(),
 		Bridge:           bridge,
 	})
 	result.Logs = append([]string(nil), sandboxResult.Logs...)
@@ -232,6 +252,29 @@ func (s *ExecutionService) Execute(
 	return result
 }
 
+func (s *ExecutionService) validateExecutionRequest(request FabricExecRequest) error {
+	if len(request.Code) > MaxSourceBytes {
+		return fmt.Errorf("fabric source exceeds %d bytes", MaxSourceBytes)
+	}
+	if request.Timeout < 0 || request.Timeout > MaxExecutionTimeout {
+		return fmt.Errorf("fabric timeout must be between 0 and %s", MaxExecutionTimeout)
+	}
+	if request.MemoryLimitBytes < 0 || request.MemoryLimitBytes > MaxMemoryBytes {
+		return fmt.Errorf("fabric memory limit must be between 0 and %d bytes", MaxMemoryBytes)
+	}
+	if request.AgentBudget < 0 || request.AgentBudget > MaxAgentBudget {
+		return fmt.Errorf("fabric agent budget must be between 0 and %d", MaxAgentBudget)
+	}
+	limits := normalizeJSONLimits(s.Limits)
+	if request.ResultMaxBytes > limits.MaxBytes {
+		return fmt.Errorf("fabric result limit exceeds %d bytes", limits.MaxBytes)
+	}
+	if err := ValidateJSON(request.Strings, limits); err != nil {
+		return fmt.Errorf("fabric named strings: %w", err)
+	}
+	return nil
+}
+
 func (s *ExecutionService) acquireExecutionView(id string) (*CapabilityView, error) {
 	if id != "" {
 		return s.Registry.AcquireView(id)
@@ -240,13 +283,16 @@ func (s *ExecutionService) acquireExecutionView(id string) (*CapabilityView, err
 }
 
 type executionBridge struct {
-	service *ExecutionService
-	view    *CapabilityView
-	outer   OuterInvocationContext
-	trace   *TraceRecorder
+	service  *ExecutionService
+	view     *CapabilityView
+	outer    OuterInvocationContext
+	trace    *TraceRecorder
+	budgets  BudgetLedger
+	nextCall atomic.Uint64
 }
 
 func (b *executionBridge) Call(ctx context.Context, ref string, args JSONObject) (JSONValue, error) {
+	nestedToolCallID := fmt.Sprintf("%s:%d", b.outer.ParentToolCallID, b.nextCall.Add(1))
 	return b.service.Registry.Invoke(ctx, InvokeRequest{
 		View: b.view,
 		Ref:  ref,
@@ -256,12 +302,13 @@ func (b *executionBridge) Call(ctx context.Context, ref string, args JSONObject)
 			CWD:              b.outer.CWD,
 			ExecutionID:      b.outer.ExecutionID,
 			ParentToolCallID: b.outer.ParentToolCallID,
+			NestedToolCallID: nestedToolCallID,
 			SessionID:        b.outer.SessionID,
 			CapabilityViewID: b.view.ID(),
 		},
 		Authorizer: b.service.Authorizer,
 		Approvals:  b.service.Approvals,
-		Budgets:    b.service.Budgets,
+		Budgets:    b.budgets,
 		Trace:      b.trace,
 		Limits:     b.service.Limits,
 	})

@@ -169,6 +169,23 @@ shell, and any `$(...)` in `ultra.json` runs at load time. Don't launch Ultra
 in a directory whose config you haven't reviewed, and don't randomly `source`
 files from the internet into your config.
 
+### Experimental Fabric Runtime
+
+Ultra can expose the experimental `fabric_exec` programmable tool in builds
+that include the restricted in-process sandbox:
+
+```bash
+task build:fabric
+# ultrarc
+option fabric true
+```
+
+Fabric runs syntax-checked TypeScript against a pinned view of Ultra's native tools.
+Nested calls retain normal hooks, session permission policy, JSON Schema
+validation, cancellation, result bounds, and an execution trace. Standard
+release builds intentionally exclude the sandbox; enabling Fabric in config
+with such a binary fails closed during agent initialization.
+
 ### Environment Variables
 
 The top-level `env` field sets environment variables at startup, before

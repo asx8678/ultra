@@ -714,6 +714,11 @@ func (app *App) Shutdown() {
 	// before closing the DB so agents can finish writing their state.
 	if app.AgentCoordinator != nil {
 		app.AgentCoordinator.CancelAll()
+		if closer, ok := app.AgentCoordinator.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				slog.Error("Failed to close agent coordinator", "error", err)
+			}
+		}
 	}
 
 	// Shared shutdown context for all timeout-bounded cleanup.

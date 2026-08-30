@@ -48,6 +48,19 @@ option metrics YES`
 	require.NotContains(t, opts, "disable_metrics")
 }
 
+func TestOption_Fabric(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "ultrarc")
+	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(`option fabric true`))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+	fabric := result["options"].(map[string]any)["fabric"].(map[string]any)
+	require.Equal(t, true, fabric["enabled"])
+}
+
 func TestOption_String(t *testing.T) {
 	t.Parallel()
 

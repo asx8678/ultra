@@ -111,6 +111,7 @@ type coordinator struct {
 	runtimeMu               sync.Mutex
 	runtimeConfigGeneration uint64
 	runtimeMCPGeneration    uint64
+	fabricRuntime           fabricRuntime
 }
 
 // CoordinatorOptions holds the dependencies for NewCoordinator. Using a
@@ -762,6 +763,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		}
 	}
 	filteredTools = tools.NewCatalog(filteredTools).Tools()
+	nativeTools := filteredTools
 
 	// Wrap tools with hook interception for the top-level agent only.
 	// Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run
@@ -771,7 +773,24 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
 	filteredTools = wrapToolsWithPolicy(filteredTools, c.permissions)
 
-	return filteredTools, nil
+	fabricEnabled := c.cfg.Config().Options.FabricEnabled()
+	if !isSubAgent && fabricEnabled && slices.Contains(agent.AllowedTools, tools.FabricExecToolName) {
+		fabricNativeTools := wrapToolsWithPolicy(nativeTools, c.permissions)
+		fabricTool, err := c.fabricExecTool(ctx, fabricNativeTools, hookRunner)
+		if err != nil {
+			return nil, err
+		}
+		fabricTools := wrapToolsWithHooks([]fantasy.AgentTool{fabricTool}, hookRunner, false)
+		fabricTools = wrapToolsWithPolicy(fabricTools, c.permissions)
+		filteredTools = append(filteredTools, fabricTools...)
+	} else if !isSubAgent && !fabricEnabled && c.fabricRuntime != nil {
+		if err := c.fabricRuntime.Close(); err != nil {
+			return nil, err
+		}
+		c.fabricRuntime = nil
+	}
+
+	return tools.NewCatalog(filteredTools).Tools(), nil
 }
 
 // BeginAccepted reserves an accept slot for sessionID on the active
@@ -789,6 +808,18 @@ func (c *coordinator) Cancel(sessionID string) {
 
 func (c *coordinator) CancelAll() {
 	c.currentAgent.CancelAll()
+}
+
+// Close releases optional coordinator-owned runtimes after active runs stop.
+func (c *coordinator) Close() error {
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	if c.fabricRuntime == nil {
+		return nil
+	}
+	err := c.fabricRuntime.Close()
+	c.fabricRuntime = nil
+	return err
 }
 
 func (c *coordinator) ClearQueue(sessionID string) {

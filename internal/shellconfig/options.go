@@ -70,6 +70,20 @@ func handleOption(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		val = args[2]
 	}
 
+	if key == "fabric" {
+		bv := true
+		if val != "" {
+			parsed, err := parseBool(val)
+			if err != nil {
+				return usage(stderr, fmt.Sprintf("option: fabric expects true/false, got %q", val))
+			}
+			bv = parsed
+		}
+		childMap(o, "fabric")["enabled"] = bv
+		slog.Info("Option set in shell config", "key", key, "value", bv)
+		return nil
+	}
+
 	if key == "attribution-trailer-style" {
 		if val == "" {
 			return usage(stderr, "option: attribution-trailer-style requires a value")

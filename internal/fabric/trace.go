@@ -1,6 +1,9 @@
 package fabric
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"sync"
 )
@@ -39,11 +42,13 @@ type TraceOperation struct {
 	Ref          string           `json:"ref"`
 	Provider     string           `json:"provider,omitempty"`
 	Action       string           `json:"action,omitempty"`
-	Args         JSONObject       `json:"args"`
+	Args         JSONObject       `json:"args,omitempty"`
+	ArgsDigest   string           `json:"args_digest,omitempty"`
 	Outcome      ExecutionOutcome `json:"outcome,omitempty"`
 	FailureStage FailureStage     `json:"failure_stage,omitempty"`
 	Error        string           `json:"error,omitempty"`
 	Result       JSONValue        `json:"result,omitempty"`
+	ResultDigest string           `json:"result_digest,omitempty"`
 }
 
 // TraceCounts records projection losses in the bounded durable trace.
@@ -65,12 +70,18 @@ type ExecutionTrace struct {
 	Error      string           `json:"error,omitempty"`
 }
 
+const (
+	maxTraceStringBytes = 2048
+	maxTraceOperations  = MaxNestedCalls + 1
+)
+
 // TraceRecorder records issue order independently of completion order.
 type TraceRecorder struct {
 	mu         sync.Mutex
 	sealed     bool
 	phases     []string
 	operations []*TraceOperation
+	counts     TraceCounts
 }
 
 // CallCompletion is the terminal data for one nested action.
@@ -112,14 +123,39 @@ func (r *TraceRecorder) BeginCall(ref string, args JSONObject) *CallTraceHandle 
 	if r.sealed {
 		return &CallTraceHandle{}
 	}
+	if len(r.operations) >= maxTraceOperations {
+		r.counts.DroppedOperations++
+		return &CallTraceHandle{}
+	}
 	index := len(r.operations)
-	r.operations = append(r.operations, &TraceOperation{
-		Type:     "call",
-		Sequence: index + 1,
-		Ref:      ref,
-		Args:     cloneJSONObject(args),
-	})
+	ref, truncated := projectTraceString(ref)
+	if truncated {
+		r.counts.TruncatedValues++
+	}
+	operation := &TraceOperation{
+		Type:       "call",
+		Sequence:   index + 1,
+		Ref:        ref,
+		ArgsDigest: digestTraceValue(args),
+	}
+	if len(args) > 0 {
+		r.counts.RedactedValues++
+	}
+	r.operations = append(r.operations, operation)
 	return &CallTraceHandle{recorder: r, index: index}
+}
+
+// SetArgs fingerprints the authoritative prepared arguments without retaining payloads.
+func (h *CallTraceHandle) SetArgs(args JSONObject) {
+	if h == nil || h.recorder == nil {
+		return
+	}
+	h.recorder.mu.Lock()
+	defer h.recorder.mu.Unlock()
+	if h.index < 0 || h.index >= len(h.recorder.operations) || h.recorder.sealed {
+		return
+	}
+	h.recorder.operations[h.index].ArgsDigest = digestTraceValue(args)
 }
 
 // Complete records the call terminal state. Repeated completions are ignored.
@@ -138,8 +174,14 @@ func (h *CallTraceHandle) Complete(completion CallCompletion) {
 		operation.Provider = completion.Provider
 		operation.Action = completion.Action
 		operation.FailureStage = completion.FailureStage
-		operation.Error = completion.Error
-		operation.Result = cloneJSONValue(completion.Result)
+		operation.Error, _ = projectTraceString(completion.Error)
+		if operation.Error != completion.Error {
+			h.recorder.counts.TruncatedValues++
+		}
+		if completion.Result != nil {
+			operation.ResultDigest = digestTraceValue(completion.Result)
+			h.recorder.counts.RedactedValues++
+		}
 	})
 }
 
@@ -154,14 +196,35 @@ func (r *TraceRecorder) Seal(outcome ExecutionOutcome, message string) Execution
 		operations[i].Args = cloneJSONObject(operation.Args)
 		operations[i].Result = cloneJSONValue(operation.Result)
 	}
+	message, truncated := projectTraceString(message)
+	if truncated {
+		r.counts.TruncatedValues++
+	}
 	return ExecutionTrace{
 		Kind:       "ultra.fabric.execution",
 		Version:    1,
 		Outcome:    outcome,
 		Phases:     slices.Clone(r.phases),
 		Operations: operations,
+		Counts:     r.counts,
 		Error:      message,
 	}
+}
+
+func projectTraceString(value string) (string, bool) {
+	if len(value) <= maxTraceStringBytes {
+		return value, false
+	}
+	return value[:maxTraceStringBytes] + "…", true
+}
+
+func digestTraceValue(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
 }
 
 func cloneJSONObject(value JSONObject) JSONObject {

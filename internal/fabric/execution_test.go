@@ -62,11 +62,43 @@ func TestFabricExecTypeFailureHasNoEffects(t *testing.T) {
 		CWD:              t.TempDir(),
 	})
 	require.Equal(t, OutcomeFailed, result.Outcome)
-	require.Contains(t, result.Error, "type checking")
+	require.Contains(t, result.Error, "compilation checks")
 	require.Len(t, result.Diagnostics, 1)
 	require.Zero(t, sandboxCalls.Load())
 	require.Empty(t, result.Trace.Operations)
 	require.Equal(t, []string{"compile"}, result.Trace.Phases)
+}
+
+func TestFabricExecRejectsUnsafeOuterLimitsBeforeCompile(t *testing.T) {
+	t.Parallel()
+	var compilerCalls atomic.Int32
+	service := &ExecutionService{
+		Registry: NewRegistry(),
+		Compiler: compilerFunc(func(context.Context, CompileRequest) (CompileResult, error) {
+			compilerCalls.Add(1)
+			return CompileResult{}, nil
+		}),
+		Sandbox: sandboxFunc(func(context.Context, SandboxExecutionRequest) (SandboxExecutionResult, error) {
+			t.Fatal("sandbox must not run for invalid outer limits")
+			return SandboxExecutionResult{}, nil
+		}),
+	}
+	outer := OuterInvocationContext{ExecutionID: "execution-limits"}
+	for _, request := range []FabricExecRequest{
+		{Code: strings.Repeat("x", MaxSourceBytes+1)},
+		{Code: "return true", Timeout: MaxExecutionTimeout + 1},
+		{Code: "return true", Timeout: -1},
+		{Code: "return true", MemoryLimitBytes: MaxMemoryBytes + 1},
+		{Code: "return true", MemoryLimitBytes: -1},
+		{Code: "return true", AgentBudget: MaxAgentBudget + 1},
+		{Code: "return true", AgentBudget: -1},
+		{Code: "return true", ResultMaxBytes: DefaultJSONLimits().MaxBytes + 1},
+	} {
+		result := service.Execute(t.Context(), request, outer)
+		require.Equal(t, OutcomeFailed, result.Outcome)
+		require.NotEmpty(t, result.Error)
+	}
+	require.Zero(t, compilerCalls.Load())
 }
 
 func TestFabricExecReturnsBoundedJSON(t *testing.T) {

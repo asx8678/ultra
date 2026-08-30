@@ -4,6 +4,7 @@ package fabric
 import (
 	"context"
 	"encoding/json"
+	"sync"
 )
 
 // JSONValue is a value that must satisfy ValidateJSON before crossing the
@@ -91,4 +92,28 @@ type InvocationContext struct {
 	AgentID          string
 	CapabilityViewID string
 	Update           func(ActivityUpdate)
+	state            *sync.Map
+}
+
+func (c *InvocationContext) ensureState() {
+	if c.state == nil {
+		c.state = &sync.Map{}
+	}
+}
+
+// SetState stores invocation-local provider lifecycle data. It is not exposed
+// to guest code and lives only for this nested call.
+func (c *InvocationContext) SetState(key string, value any) {
+	if c.state == nil {
+		c.state = &sync.Map{}
+	}
+	c.state.Store(key, value)
+}
+
+// State returns invocation-local provider lifecycle data.
+func (c InvocationContext) State(key string) (any, bool) {
+	if c.state == nil {
+		return nil, false
+	}
+	return c.state.Load(key)
 }

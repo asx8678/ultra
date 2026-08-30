@@ -49,10 +49,9 @@ func TestTracePreservesIssueOrder(t *testing.T) {
 	require.Equal(t, OutcomeSucceeded, trace.Operations[0].Outcome)
 	require.Equal(t, OutcomeFailed, trace.Operations[1].Outcome)
 	require.Equal(t, OutcomeSucceeded, trace.Operations[2].Outcome)
-
-	// Mutating caller-owned arguments or returned traces cannot mutate the
-	// recorder's sealed snapshot.
-	trace.Operations[0].Args["value"] = 99
-	again := recorder.Seal(OutcomeFailed, "one call failed")
-	require.Equal(t, 1, again.Operations[0].Args["value"])
+	require.Nil(t, trace.Operations[0].Args)
+	require.Nil(t, trace.Operations[0].Result)
+	require.Equal(t, digestTraceValue(JSONObject{"value": 1}), trace.Operations[0].ArgsDigest)
+	require.Equal(t, digestTraceValue("first"), trace.Operations[0].ResultDigest)
+	require.Equal(t, 5, trace.Counts.RedactedValues)
 }

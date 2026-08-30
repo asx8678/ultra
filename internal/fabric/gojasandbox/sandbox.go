@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +26,56 @@ const (
 var errGojaSandboxClosed = errors.New("fabric JavaScript sandbox is closed")
 
 type gojaInterrupt struct{ err error }
+
+type gojaCompletion struct {
+	resolve func(any) error
+	reject  func(any) error
+	value   fabric.JSONValue
+	err     error
+}
+
+type gojaCallDispatcher struct {
+	ctx         context.Context
+	request     fabric.SandboxExecutionRequest
+	completions chan gojaCompletion
+	calls       sync.WaitGroup
+	issued      int
+}
+
+func newGojaCallDispatcher(ctx context.Context, request fabric.SandboxExecutionRequest) *gojaCallDispatcher {
+	return &gojaCallDispatcher{
+		ctx:         ctx,
+		request:     request,
+		completions: make(chan gojaCompletion, 256),
+	}
+}
+
+func (d *gojaCallDispatcher) invoke(vm *goja.Runtime, ref string, args fabric.JSONObject) goja.Value {
+	promise, resolve, reject := vm.NewPromise()
+	if d.issued >= fabric.MaxNestedCalls {
+		_ = reject(vm.NewGoError(fmt.Errorf("nested call limit %d reached", fabric.MaxNestedCalls)))
+		return vm.ToValue(promise)
+	}
+	d.issued++
+	d.calls.Add(1)
+	go func() {
+		defer d.calls.Done()
+		var value fabric.JSONValue
+		var err error
+		if d.request.Bridge == nil {
+			err = errors.New("fabric call bridge is unavailable")
+		} else {
+			value, err = d.request.Bridge.Call(d.ctx, ref, args)
+		}
+		select {
+		case d.completions <- gojaCompletion{resolve: resolve, reject: reject, value: value, err: err}:
+		case <-d.ctx.Done():
+		}
+	}()
+	return vm.ToValue(promise)
+}
+
+func (d *gojaCallDispatcher) wait() { d.calls.Wait() }
 
 type boundedGojaLogs struct {
 	values   []string
@@ -68,7 +120,7 @@ type GojaSandbox struct {
 	closed atomic.Bool
 }
 
-// NewGojaSandbox creates an isolated JavaScript sandbox.
+// NewGojaSandbox creates a restricted JavaScript sandbox.
 func NewGojaSandbox() *GojaSandbox {
 	return &GojaSandbox{active: make(map[uint64]*goja.Runtime)}
 }
@@ -94,10 +146,19 @@ func (s *GojaSandbox) Execute(
 	}
 	defer s.unregister(runID)
 
-	logs := newBoundedGojaLogs(request.MaxLogBytes)
-	if err := installGojaFabricBridge(ctx, vm, request, logs); err != nil {
-		return gojaErrorResult(err), err
+	var executionCtx context.Context
+	var cancel context.CancelFunc
+	if request.Timeout > 0 {
+		executionCtx, cancel = context.WithTimeout(ctx, request.Timeout)
+	} else {
+		executionCtx, cancel = context.WithCancel(ctx)
 	}
+	dispatcher := newGojaCallDispatcher(executionCtx, request)
+	defer func() {
+		cancel()
+		dispatcher.wait()
+	}()
+
 	for _, name := range []string{
 		"process", "require", "fetch", "XMLHttpRequest", "WebSocket",
 		"Deno", "Bun", "load", "read", "readFile", "std", "os",
@@ -106,6 +167,10 @@ func (s *GojaSandbox) Execute(
 			err = fmt.Errorf("remove ambient capability %q: %w", name, err)
 			return gojaErrorResult(err), err
 		}
+	}
+	logs := newBoundedGojaLogs(request.MaxLogBytes)
+	if err := installGojaFabricBridge(vm, request, logs, dispatcher); err != nil {
+		return gojaErrorResult(err), err
 	}
 
 	limit := request.MemoryLimitBytes
@@ -118,7 +183,7 @@ func (s *GojaSandbox) Execute(
 	}
 	stop := make(chan struct{})
 	var interruptErr atomic.Pointer[gojaInterrupt]
-	go monitorGojaExecution(ctx, vm, limit, stop, &interruptErr)
+	go monitorGojaExecution(executionCtx, vm, limit, stop, &interruptErr)
 	defer close(stop)
 
 	wrapped := "(async function __ultra_fabric_main__() {\n" + request.JavaScript + "\n})()"
@@ -134,14 +199,14 @@ func (s *GojaSandbox) Execute(
 		result.Logs = logs.values
 		return result, err
 	}
-	if err := ctx.Err(); err != nil {
+	if err := executionCtx.Err(); err != nil {
 		result := gojaErrorResult(err)
 		result.Logs = logs.values
 		return result, err
 	}
-	resultValue, err := settledGojaValue(value)
+	resultValue, err := settledGojaValue(executionCtx, vm, value, dispatcher)
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
+		if contextErr := executionCtx.Err(); contextErr != nil {
 			err = contextErr
 		}
 		result := gojaErrorResult(err)
@@ -207,30 +272,19 @@ func (*GojaSandbox) Features() SandboxFeatures {
 }
 
 func installGojaFabricBridge(
-	ctx context.Context,
 	vm *goja.Runtime,
 	request fabric.SandboxExecutionRequest,
 	logs *boundedGojaLogs,
+	dispatcher *gojaCallDispatcher,
 ) error {
 	bridge := vm.NewObject()
 	if err := bridge.Set("call", func(call goja.FunctionCall) goja.Value {
-		if request.Bridge == nil {
-			panic(vm.NewGoError(errors.New("fabric call bridge is unavailable")))
-		}
 		ref := call.Argument(0).String()
-		normalized, err := normalizeGojaJSON(call.Argument(1).Export())
-		args, ok := normalized.(map[string]any)
-		if !ok && err == nil {
-			err = errors.New("fabric call arguments must be an object")
-		}
+		args, err := gojaCallArgs(call.Argument(1))
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
-		result, err := request.Bridge.Call(ctx, ref, args)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return vm.ToValue(result)
+		return dispatcher.invoke(vm, ref, args)
 	}); err != nil {
 		return fmt.Errorf("install Fabric call bridge: %w", err)
 	}
@@ -250,6 +304,15 @@ func installGojaFabricBridge(
 	if err := vm.Set("fabric", bridge); err != nil {
 		return fmt.Errorf("install Fabric bridge: %w", err)
 	}
+	if _, err := vm.RunString(`Object.freeze(globalThis.fabric);`); err != nil {
+		return fmt.Errorf("freeze Fabric bridge: %w", err)
+	}
+	if err := installGojaNamedStrings(vm, request.Strings); err != nil {
+		return err
+	}
+	if err := installGojaCapabilityGlobals(vm, request.Bindings, dispatcher); err != nil {
+		return err
+	}
 	console := vm.NewObject()
 	if err := console.Set("log", func(call goja.FunctionCall) goja.Value {
 		parts := make([]any, 0, len(call.Arguments))
@@ -261,7 +324,99 @@ func installGojaFabricBridge(
 	}); err != nil {
 		return fmt.Errorf("install console bridge: %w", err)
 	}
-	return vm.Set("console", console)
+	if err := vm.Set("console", console); err != nil {
+		return err
+	}
+	if _, err := vm.RunString(`Object.freeze(globalThis.console);`); err != nil {
+		return fmt.Errorf("freeze console bridge: %w", err)
+	}
+	return nil
+}
+
+func gojaCallArgs(value goja.Value) (fabric.JSONObject, error) {
+	if goja.IsUndefined(value) || goja.IsNull(value) {
+		return fabric.JSONObject{}, nil
+	}
+	normalized, err := normalizeGojaJSON(value.Export())
+	if err != nil {
+		return nil, err
+	}
+	args, ok := normalized.(map[string]any)
+	if !ok {
+		return nil, errors.New("fabric call arguments must be an object")
+	}
+	return args, nil
+}
+
+func installGojaNamedStrings(vm *goja.Runtime, values map[string]string) error {
+	literal := vm.NewObject()
+	for name, value := range values {
+		if err := literal.Set(name, value); err != nil {
+			return fmt.Errorf("install Fabric named string %q: %w", name, err)
+		}
+	}
+	if err := vm.Set("π", literal); err != nil {
+		return fmt.Errorf("install Fabric named strings: %w", err)
+	}
+	_, err := vm.RunString(`Object.freeze(globalThis["π"]);`)
+	if err != nil {
+		return fmt.Errorf("freeze Fabric named strings: %w", err)
+	}
+	return nil
+}
+
+func installGojaCapabilityGlobals(
+	vm *goja.Runtime,
+	bindings []fabric.CapabilityBinding,
+	dispatcher *gojaCallDispatcher,
+) error {
+	providers := make(map[string]map[string]string)
+	for _, binding := range bindings {
+		provider, action, found := strings.Cut(binding.Ref, ".")
+		if !found {
+			continue
+		}
+		if provider == "fabric" || provider == "console" || provider == "π" {
+			return fmt.Errorf("fabric provider %q conflicts with a sandbox global", provider)
+		}
+		if providers[provider] == nil {
+			providers[provider] = make(map[string]string)
+		}
+		providers[provider][action] = binding.Ref
+	}
+	providerNames := make([]string, 0, len(providers))
+	for provider := range providers {
+		providerNames = append(providerNames, provider)
+	}
+	slices.Sort(providerNames)
+	for _, provider := range providerNames {
+		actions := providers[provider]
+		providerObject := vm.NewObject()
+		actionNames := make([]string, 0, len(actions))
+		for action := range actions {
+			actionNames = append(actionNames, action)
+		}
+		slices.Sort(actionNames)
+		for _, action := range actionNames {
+			ref := actions[action]
+			if err := providerObject.Set(action, func(call goja.FunctionCall) goja.Value {
+				args, err := gojaCallArgs(call.Argument(0))
+				if err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return dispatcher.invoke(vm, ref, args)
+			}); err != nil {
+				return fmt.Errorf("install Fabric capability %q: %w", ref, err)
+			}
+		}
+		if err := vm.Set(provider, providerObject); err != nil {
+			return fmt.Errorf("install Fabric provider %q: %w", provider, err)
+		}
+		if _, err := vm.RunString(fmt.Sprintf(`Object.freeze(globalThis[%q]);`, provider)); err != nil {
+			return fmt.Errorf("freeze Fabric provider %q: %w", provider, err)
+		}
+	}
+	return nil
 }
 
 func monitorGojaExecution(
@@ -299,19 +454,36 @@ func monitorGojaExecution(
 	}
 }
 
-func settledGojaValue(value goja.Value) (goja.Value, error) {
+func settledGojaValue(
+	ctx context.Context,
+	vm *goja.Runtime,
+	value goja.Value,
+	dispatcher *gojaCallDispatcher,
+) (goja.Value, error) {
 	promise, ok := value.Export().(*goja.Promise)
 	if !ok {
 		return value, nil
 	}
-	switch promise.State() {
-	case goja.PromiseStateFulfilled:
-		return promise.Result(), nil
-	case goja.PromiseStateRejected:
-		return nil, fmt.Errorf("fabric JavaScript rejected: %s", promise.Result().String())
-	default:
-		return nil, errors.New("fabric JavaScript left an unsettled promise")
+	for promise.State() == goja.PromiseStatePending {
+		select {
+		case completion := <-dispatcher.completions:
+			var err error
+			if completion.err != nil {
+				err = completion.reject(vm.NewGoError(completion.err))
+			} else {
+				err = completion.resolve(completion.value)
+			}
+			if err != nil {
+				return nil, err
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+	if promise.State() == goja.PromiseStateRejected {
+		return nil, fmt.Errorf("fabric JavaScript rejected: %s", promise.Result().String())
+	}
+	return promise.Result(), nil
 }
 
 func normalizeGojaJSON(value any) (fabric.JSONValue, error) {

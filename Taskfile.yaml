@@ -55,6 +55,19 @@ tasks:
     generates:
       - ultra{{exeExt}}
 
+  build:fabric:
+    desc: Build with the experimental Fabric sandbox
+    vars:
+      LDFLAGS: '{{if .VERSION}}-ldflags="-X github.com/asx8678/ultra/internal/version.Version={{.VERSION}}"{{end}}'
+    cmds:
+      - "go build -v -tags fabric_sandbox {{.LDFLAGS}} -o ultra-fabric{{exeExt}} ."
+
+  run:fabric:
+    desc: Run with the experimental Fabric sandbox
+    cmds:
+      - task: build:fabric
+      - "./ultra-fabric{{exeExt}} {{.CLI_ARGS}}"
+
   run:
     desc: Run build
     cmds:
@@ -83,6 +96,11 @@ tasks:
     desc: Run tests
     cmds:
       - go test -race -failfast ./... {{.CLI_ARGS}}
+
+  test:fabric:
+    desc: Run tests with the experimental Fabric sandbox
+    cmds:
+      - go test -tags fabric_sandbox -failfast ./... {{.CLI_ARGS}}
 
   test:record:
     desc: Run tests and record all VCR cassettes again

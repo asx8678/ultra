@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/fabric"
+	"github.com/asx8678/ultra/internal/hooks"
 	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/toolmeta"
+	"github.com/tidwall/sjson"
 )
 
 const ultraFabricProviderName = "host"
@@ -22,13 +25,32 @@ const ultraFabricProviderName = "host"
 type UltraFabricProvider struct {
 	tools       map[string]fantasy.AgentTool
 	descriptors map[string]fabric.ActionDescriptor
+	hookRunner  *hooks.Runner
 }
+
+const ultraFabricHookStateKey = "ultra.fabric.hook"
 
 // NewUltraFabricProvider snapshots executable tools and their schemas.
 func NewUltraFabricProvider(agentTools []fantasy.AgentTool) (*UltraFabricProvider, error) {
+	return newUltraFabricProvider(agentTools, nil)
+}
+
+// NewUltraFabricProviderWithHooks also runs hooks during argument preparation.
+func NewUltraFabricProviderWithHooks(
+	agentTools []fantasy.AgentTool,
+	hookRunner *hooks.Runner,
+) (*UltraFabricProvider, error) {
+	return newUltraFabricProvider(agentTools, hookRunner)
+}
+
+func newUltraFabricProvider(
+	agentTools []fantasy.AgentTool,
+	hookRunner *hooks.Runner,
+) (*UltraFabricProvider, error) {
 	provider := &UltraFabricProvider{
 		tools:       make(map[string]fantasy.AgentTool, len(agentTools)),
 		descriptors: make(map[string]fabric.ActionDescriptor, len(agentTools)),
+		hookRunner:  hookRunner,
 	}
 	for _, tool := range agentTools {
 		if tool == nil {
@@ -90,6 +112,40 @@ func (p *UltraFabricProvider) Describe(
 	return descriptor, ok, nil
 }
 
+// PrepareArguments runs Ultra's hook preflight before Fabric validates and
+// approves the authoritative nested arguments.
+func (p *UltraFabricProvider) PrepareArguments(
+	ctx context.Context,
+	action string,
+	args fabric.JSONObject,
+	invocation fabric.InvocationContext,
+) (fabric.JSONObject, error) {
+	if p.hookRunner == nil {
+		return args, nil
+	}
+	input, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Ultra Fabric hook input: %w", err)
+	}
+	result, hookErr := p.hookRunner.Run(
+		ctx, hooks.EventPreToolUse, invocation.SessionID, action, string(input),
+	)
+	if hookErr != nil {
+		slog.Warn("Fabric hook execution error, proceeding with nested tool call", "tool", action, "error", hookErr)
+	}
+	if result.Decision == hooks.DecisionDeny || result.Halt {
+		return nil, fmt.Errorf("nested tool call blocked by hook: %s", result.Reason)
+	}
+	prepared := args
+	if result.UpdatedInput != "" {
+		if err := json.Unmarshal([]byte(result.UpdatedInput), &prepared); err != nil {
+			return nil, fmt.Errorf("decode Fabric hook-updated input for %q: %w", action, err)
+		}
+	}
+	invocation.SetState(ultraFabricHookStateKey, result)
+	return prepared, nil
+}
+
 func (p *UltraFabricProvider) Invoke(
 	ctx context.Context,
 	action string,
@@ -106,12 +162,26 @@ func (p *UltraFabricProvider) Invoke(
 	}
 	ctx = context.WithValue(ctx, SessionIDContextKey, invocation.SessionID)
 	ctx = context.WithValue(ctx, MessageIDContextKey, invocation.ExecutionID)
+	var hookResult hooks.AggregateResult
+	if state, ok := invocation.State(ultraFabricHookStateKey); ok {
+		hookResult, _ = state.(hooks.AggregateResult)
+		if hookResult.Decision == hooks.DecisionAllow {
+			ctx = permission.WithHookApproval(ctx, invocation.NestedToolCallID)
+		}
+	}
 	response, err := tool.Run(ctx, fantasy.ToolCall{
 		ID: invocation.NestedToolCallID, Name: action, Input: string(input),
 	})
 	if err != nil {
 		return nil, err
 	}
+	if hookResult.Context != "" {
+		if response.Content != "" {
+			response.Content += "\n"
+		}
+		response.Content += hookResult.Context
+	}
+	response.Metadata = mergeFabricHookMetadata(response.Metadata, hookResult)
 	result := fabric.JSONObject{
 		"type": response.Type, "content": response.Content,
 		"is_error": response.IsError, "stop_turn": response.StopTurn,
@@ -140,12 +210,15 @@ func (a UltraFabricAuthorizer) Authorize(
 		return fabric.AuthorizationDecision{Reason: "Ultra permission service is unavailable"}, nil
 	}
 	action := strings.TrimPrefix(request.Ref, ultraFabricProviderName+".")
-	if _, known := toolmeta.Lookup(action); !known {
-		return fabric.AuthorizationDecision{Reason: "tool has no authoritative Ultra metadata"}, nil
-	}
+	_, known := toolmeta.Lookup(action)
 	mode, scoped := permission.SessionMode(a.Permissions, request.Context.SessionID)
 	if !scoped || mode == permission.ModeAsk || mode == permission.ModeYolo {
+		// Native and MCP tools still enforce their own operation-specific
+		// permission requests at invocation time.
 		return fabric.AuthorizationDecision{Allowed: true}, nil
+	}
+	if !known {
+		return fabric.AuthorizationDecision{Reason: "tool has no authoritative Ultra metadata"}, nil
 	}
 	if permission.ToolAllowed(mode, action) {
 		return fabric.AuthorizationDecision{Allowed: true}, nil
@@ -164,6 +237,28 @@ func (UltraFabricApprovals) Decide(
 	fabric.ApprovalRequest,
 ) (fabric.ApprovalDecision, error) {
 	return fabric.ApprovalDecision{Kind: fabric.ApprovalAllow, Scope: fabric.ApprovalOnce}, nil
+}
+
+func mergeFabricHookMetadata(existing string, result hooks.AggregateResult) string {
+	if result.HookCount == 0 {
+		return existing
+	}
+	metadata := hooks.HookMetadata{
+		HookCount: result.HookCount, Decision: result.Decision.String(), Halt: result.Halt,
+		Reason: result.Reason, InputRewrite: result.UpdatedInput != "", Hooks: result.Hooks,
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return existing
+	}
+	if existing == "" {
+		existing = "{}"
+	}
+	merged, err := sjson.SetRaw(existing, "hook", string(encoded))
+	if err != nil {
+		return existing
+	}
+	return merged
 }
 
 func ultraToolSchema(info fantasy.ToolInfo) (json.RawMessage, error) {
