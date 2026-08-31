@@ -71,15 +71,10 @@ func indexedCandidateFits(count int, selectedBytes, nextSize int64) bool {
 	return nextSize <= maxIndexedSourceBytes-selectedBytes
 }
 
-// discoverFiles returns a deterministic, root-relative inventory. Directory
+// discoverFilesWithFacts avoids retaining source bytes when a strict content
+// hash proves that the previous immutable facts are still current. Directory
 // traversal and policy filtering stay serial and deterministic; safe regular
 // files are then read and hashed concurrently.
-func discoverFiles(ctx context.Context, root string, excludedDirs ...string) (discoveryResult, error) {
-	return discoverFilesWithFacts(ctx, root, nil, excludedDirs...)
-}
-
-// discoverFilesWithFacts avoids retaining source bytes when a strict content
-// hash proves that the previous immutable facts are still current.
 func discoverFilesWithFacts(
 	ctx context.Context,
 	root string,

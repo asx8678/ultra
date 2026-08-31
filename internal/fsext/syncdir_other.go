@@ -16,3 +16,8 @@ func SyncDirectory(path string) error {
 	}
 	return errors.Join(directory.Sync(), directory.Close())
 }
+
+// ReplaceFile renames source over destination, replacing it atomically.
+func ReplaceFile(source, destination string) error {
+	return os.Rename(source, destination)
+}

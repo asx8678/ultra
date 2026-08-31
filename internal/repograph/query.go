@@ -364,6 +364,10 @@ func impactSnapshotContext(ctx context.Context, snapshot *Snapshot, options Impa
 	return renderGraphResult("impact", snapshot, visible, suggestedReadWindows(visible), maxImpactDepth, maxTokens, warnings), nil
 }
 
+// ensureGraph requires the snapshot to be fully materialized before
+// publication (manager refresh and load paths build the graph eagerly).
+// Publishing a facts-only snapshot and querying it concurrently would race
+// here; manager construction must uphold the invariant instead.
 func ensureGraph(snapshot *Snapshot) *graphIndex {
 	if snapshot == nil {
 		return newGraphIndex(nil)
@@ -588,16 +592,12 @@ func (queue expansionQueue) Swap(i, j int) { queue[i], queue[j] = queue[j], queu
 func (queue *expansionQueue) Push(value any) {
 	*queue = append(*queue, value.(expansionItem))
 }
+
 func (queue *expansionQueue) Pop() any {
 	old := *queue
 	last := old[len(old)-1]
 	*queue = old[:len(old)-1]
 	return last
-}
-
-func expandFocus(index *graphIndex, seeds []resolvedSeed, scope Scope, maxDepth int) []Hit {
-	hits, _ := expandFocusContext(context.Background(), index, seeds, scope, maxDepth)
-	return hits
 }
 
 func expandFocusContext(ctx context.Context, index *graphIndex, seeds []resolvedSeed, scope Scope, maxDepth int) ([]Hit, error) {
@@ -654,11 +654,6 @@ func expandFocusBoundedContext(ctx context.Context, index *graphIndex, seeds []r
 		}
 	}
 	return sortedHits(results), nil
-}
-
-func resolveImpactSeeds(index *graphIndex, files, symbols []string, cochanges map[string]int64) []resolvedSeed {
-	seeds, _ := resolveImpactSeedsContext(context.Background(), index, files, symbols, cochanges)
-	return seeds
 }
 
 func resolveImpactSeedsContext(ctx context.Context, index *graphIndex, files, symbols []string, cochanges map[string]int64) ([]resolvedSeed, error) {
@@ -720,11 +715,6 @@ func resolveImpactSeedsContext(ctx context.Context, index *graphIndex, files, sy
 		return graphNodeLess(result[i].node, result[j].node)
 	})
 	return result, nil
-}
-
-func expandImpact(index *graphIndex, seeds []resolvedSeed, maxDepth int) []Hit {
-	hits, _ := expandImpactContext(context.Background(), index, seeds, maxDepth)
-	return hits
 }
 
 func expandImpactContext(ctx context.Context, index *graphIndex, seeds []resolvedSeed, maxDepth int) ([]Hit, error) {

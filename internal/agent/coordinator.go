@@ -890,11 +890,14 @@ func (c *coordinator) repoGraphManager(workingDir string) (*repograph.Manager, e
 // Close releases optional coordinator-owned runtimes after active runs stop.
 func (c *coordinator) Close() error {
 	c.orchestratorMu.Lock()
-	if c.orchestrator != nil {
-		c.orchestrator.Close()
-		c.orchestrator = nil
-	}
+	orchestrator := c.orchestrator
+	c.orchestrator = nil
 	c.orchestratorMu.Unlock()
+	// Close outside orchestratorMu: Close drains active runs, and a recursive
+	// worker needs the mutex to reach the orchestrator mid-call.
+	if orchestrator != nil {
+		orchestrator.Close()
+	}
 
 	c.repoGraphMu.Lock()
 	var closeErrors []error

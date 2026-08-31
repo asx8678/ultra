@@ -328,6 +328,7 @@ func TestExtractOutlineLanguageTiers(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			facts := extractFile(testCase.path, testCase.path, []byte(testCase.source), "digest")
 			for _, expected := range testCase.symbols {
 				require.True(t, slices.ContainsFunc(facts.Symbols, func(symbol SymbolFact) bool {

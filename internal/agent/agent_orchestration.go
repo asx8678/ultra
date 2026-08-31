@@ -58,7 +58,7 @@ type AgentParams struct {
 	Concurrency     int         `json:"concurrency,omitempty" description:"Maximum workers running at once (1-16)"`
 	Background      bool        `json:"background,omitempty" description:"Return immediately and supervise in the background"`
 	RunID           string      `json:"run_id,omitempty" description:"Run identifier for wait, status, or cancel"`
-	TokenBudget     int64       `json:"token_budget,omitempty" description:"Hard aggregate output-token allowance across workers"`
+	TokenBudget     int64       `json:"token_budget,omitempty" description:"Output-token allowance shared across workers; divided into per-worker caps"`
 	SynthesisPrompt string      `json:"synthesis_prompt,omitempty" description:"Council judge instructions"`
 }
 
@@ -188,10 +188,10 @@ func (c *coordinator) handleAgentTool(
 	legacy := isLegacyAgentCall(params)
 	plan.Legacy = legacy
 	background := params.Background || action == "spawn"
-	jobCtx := ctx
-	if background {
-		jobCtx = context.WithoutCancel(ctx)
-	}
+	// Detach the run from the tool call context. A canceled client disconnect
+	// must not tear down the persisted run mid-flight; the caller learns the
+	// run_id below and can supervise or cancel it explicitly.
+	jobCtx := context.WithoutCancel(ctx)
 	job, err := manager.Start(jobCtx, AgentRunSnapshot{
 		RunID:           newAgentRunID(),
 		State:           AgentRunQueued,
@@ -211,9 +211,13 @@ func (c *coordinator) handleAgentTool(
 		return agentSnapshotResponse(job.Snapshot(), nil)
 	}
 
-	snapshot, err := manager.Wait(ctx, job.Snapshot().RunID, sessionID)
+	runID := job.Snapshot().RunID
+	snapshot, err := manager.Wait(ctx, runID, sessionID)
 	if err != nil {
-		return agentSnapshotResponse(snapshot, err)
+		// The run outlives this call; surface the run_id so the caller can
+		// supervise or cancel it instead of leaving it orphaned.
+		message := fmt.Sprintf("%s (agent run %q is still supervised; use action \"status\", \"wait\", or \"cancel\" with run_id %q)", err.Error(), runID, runID)
+		return agentSnapshotResponse(snapshot, errors.New(message))
 	}
 	if legacy && len(snapshot.Tasks) == 1 {
 		result := snapshot.Tasks[0]
@@ -269,6 +273,19 @@ func newAgentOrchestrator(dir string) *agentOrchestrator {
 				}
 				snapshot.Tasks[index].State = AgentTaskCanceled
 				snapshot.Tasks[index].Error = snapshot.Error
+				snapshot.Tasks[index].FinishedAt = &now
+			}
+		}
+		// A crash between the final task update and the run update can leave
+		// unfinished tasks inside a terminal run; close them out consistently.
+		if isTerminalAgentRunState(snapshot.State) {
+			now := time.Now().UTC()
+			for index := range snapshot.Tasks {
+				if snapshot.Tasks[index].State != AgentTaskPending && snapshot.Tasks[index].State != AgentTaskRunning {
+					continue
+				}
+				snapshot.Tasks[index].State = AgentTaskCanceled
+				snapshot.Tasks[index].Error = "agent run finished before this task completed"
 				snapshot.Tasks[index].FinishedAt = &now
 			}
 		}
@@ -604,9 +621,24 @@ func (c *coordinator) executeAgentPlan(
 			}
 			continue
 		}
+		select {
+		case completion := <-completed:
+			running--
+			finished++
+			states[completion.index] = completion.result.State
+			results[completion.result.ID] = completion.result
+			updateTask(completion.index, completion.result)
+		case <-ctx.Done():
+			// The loop head marks pending tasks canceled; workers that keep
+			// running despite cancellation are reaped below.
+		}
+	}
+
+	// Drain workers that did not honor cancellation so their results are
+	// recorded and no goroutine outlives the run.
+	for running > 0 {
 		completion := <-completed
 		running--
-		finished++
 		states[completion.index] = completion.result.State
 		results[completion.result.ID] = completion.result
 		updateTask(completion.index, completion.result)
@@ -1027,6 +1059,15 @@ func taskStateForContext(ctx context.Context) AgentTaskState {
 		return AgentTaskCanceled
 	}
 	return AgentTaskFailed
+}
+
+func isTerminalAgentRunState(state AgentRunState) bool {
+	switch state {
+	case AgentRunSucceeded, AgentRunFailed, AgentRunCanceled, AgentRunInterrupted:
+		return true
+	default:
+		return false
+	}
 }
 
 func agentDepth(ctx context.Context) int {

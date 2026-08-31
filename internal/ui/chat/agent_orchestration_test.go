@@ -16,6 +16,7 @@ func TestAgentToolChildSessionIDs(t *testing.T) {
 	sty := styles.CharmtonePantera()
 
 	t.Run("legacy", func(t *testing.T) {
+		t.Parallel()
 		input, err := json.Marshal(agent.AgentParams{Prompt: "find it"})
 		require.NoError(t, err)
 		item := NewAgentToolMessageItem(&sty, message.ToolCall{ID: "call-1", Input: string(input)}, nil, false)
@@ -24,6 +25,7 @@ func TestAgentToolChildSessionIDs(t *testing.T) {
 	})
 
 	t.Run("parallel generated ids", func(t *testing.T) {
+		t.Parallel()
 		input, err := json.Marshal(agent.AgentParams{Tasks: []agent.AgentTask{
 			{ID: "review", Prompt: "review"}, {Prompt: "test"},
 		}})
@@ -36,6 +38,7 @@ func TestAgentToolChildSessionIDs(t *testing.T) {
 	})
 
 	t.Run("council synthesis", func(t *testing.T) {
+		t.Parallel()
 		input, err := json.Marshal(agent.AgentParams{Mode: "council", Tasks: []agent.AgentTask{
 			{ID: "synthesis", Prompt: "member"},
 		}})
@@ -48,6 +51,7 @@ func TestAgentToolChildSessionIDs(t *testing.T) {
 	})
 
 	t.Run("result is authoritative", func(t *testing.T) {
+		t.Parallel()
 		input, err := json.Marshal(agent.AgentParams{Action: "wait", RunID: "run"})
 		require.NoError(t, err)
 		result, err := json.Marshal(agent.AgentRunSnapshot{Tasks: []agent.AgentTaskResult{

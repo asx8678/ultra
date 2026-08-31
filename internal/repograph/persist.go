@@ -117,7 +117,7 @@ func persistSnapshot(path string, snapshot *Snapshot) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close repository graph cache: %w", err)
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := fsext.ReplaceFile(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace repository graph cache: %w", err)
 	}
 	committed = true

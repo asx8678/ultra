@@ -346,9 +346,10 @@ func extractCDeclaration(facts *FileFacts, lines []string, index int, line strin
 func extractElixirDeclaration(facts *FileFacts, lines []string, index int, line string) {
 	if match := elixirTypePattern.FindStringSubmatch(line); match != nil {
 		kind := "module"
-		if match[1] == "defprotocol" {
+		switch match[1] {
+		case "defprotocol":
 			kind = "interface"
-		} else if match[1] == "defimpl" {
+		case "defimpl":
 			kind = "impl"
 		}
 		addGenericSymbol(facts, match[2], kind, line, index+1, elixirBlockEnd(lines, index), "", true)
@@ -529,11 +530,12 @@ func extractGenericUses(facts *FileFacts, lines []string) {
 				}
 				facts.Calls = append(facts.Calls, CallFact{Caller: owner, Callee: callee, Line: lineNo})
 			}
-			if facts.Language == "shell" {
+			switch facts.Language {
+			case "shell":
 				extractShellCalls(facts, line, lineNo, owner)
-			} else if facts.Language == "ruby" {
+			case "ruby":
 				extractRubyBareCall(facts, line, lineNo, owner)
-			} else if facts.Language == "elixir" {
+			case "elixir":
 				extractElixirBareRoute(facts, line, lineNo, owner)
 			}
 			for _, match := range routeVerbArgumentPattern.FindAllStringSubmatchIndex(line, -1) {
@@ -1107,12 +1109,13 @@ func indentationExtent(lines []string, start, indent int) int {
 func leadingIndent(line string) int {
 	count := 0
 	for _, r := range line {
-		if r == ' ' {
+		switch r {
+		case ' ':
 			count++
-		} else if r == '\t' {
+		case '\t':
 			count += 4
-		} else {
-			break
+		default:
+			return count
 		}
 	}
 	return count
@@ -1301,12 +1304,8 @@ func firstIdentifier(value string) string {
 
 func routeMethod(value string) string {
 	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "add_") {
-		lower = strings.TrimPrefix(lower, "add_")
-	}
-	if strings.HasSuffix(lower, "mapping") {
-		lower = strings.TrimSuffix(lower, "mapping")
-	}
+	lower = strings.TrimPrefix(lower, "add_")
+	lower = strings.TrimSuffix(lower, "mapping")
 	switch lower {
 	case "get", "post", "put", "patch", "delete", "options", "head", "connect", "trace":
 		return strings.ToUpper(lower)

@@ -322,6 +322,81 @@ func TestAgentToolSchemaExposesNativeOrchestration(t *testing.T) {
 	}
 }
 
+func TestAgentOrchestratorDrainsWorkersThatIgnoreCancellation(t *testing.T) {
+	t.Parallel()
+	manager := newAgentOrchestrator(t.TempDir())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	job, err := manager.Start(t.Context(), AgentRunSnapshot{
+		RunID: "agent-drain", State: AgentRunQueued, ParentSessionID: "parent", StartedAt: time.Now().UTC(),
+	}, normalizedAgentPlan{Mode: "parallel", Concurrency: 1}, func(ctx context.Context, run *agentRun) {
+		run.update(manager, func(snapshot *AgentRunSnapshot) { snapshot.State = AgentRunRunning })
+		result := make(chan AgentTaskResult, 1)
+		go func() {
+			// Simulate a worker that ignores ctx and finishes on its own.
+			once.Do(func() { close(started) })
+			<-release
+			result <- finishAgentTask(AgentTaskResult{ID: "stubborn"}, AgentTaskSucceeded, "done", "", 0)
+		}()
+		type completion struct {
+			index  int
+			result AgentTaskResult
+		}
+		completed := make(chan completion, 1)
+		go func() {
+			completed <- completion{index: 0, result: <-result}
+		}()
+		select {
+		case <-completed:
+		case <-ctx.Done():
+		}
+		// Drain the worker even though it ignored cancellation.
+		<-completed
+	})
+	require.NoError(t, err)
+	<-started
+	job.cancel()
+	select {
+	case <-job.done:
+		t.Fatal("run finished while the stubborn worker was still blocked")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-job.done:
+	case <-time.After(time.Second):
+		t.Fatal("run did not finish after the stubborn worker completed")
+	}
+}
+
+func TestAgentRunPersistenceClosesStaleTasksInTerminalRuns(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	manager := newAgentOrchestrator(dir)
+	require.NoError(t, manager.persist(AgentRunSnapshot{
+		RunID: "agent-stale", State: AgentRunFailed, ParentSessionID: "parent", StartedAt: time.Now().UTC(),
+		FinishedAt: ptrTime(time.Now().UTC()),
+		Tasks: []AgentTaskResult{
+			{ID: "done", State: AgentTaskSucceeded},
+			{ID: "stuck", State: AgentTaskRunning},
+		},
+	}))
+
+	reloaded := newAgentOrchestrator(dir)
+	snapshot, err := reloaded.Snapshot("agent-stale", "parent")
+	require.NoError(t, err)
+	require.Equal(t, AgentRunFailed, snapshot.State)
+	require.Equal(t, AgentTaskSucceeded, snapshot.Tasks[0].State)
+	require.Equal(t, AgentTaskCanceled, snapshot.Tasks[1].State)
+	require.NotEmpty(t, snapshot.Tasks[1].Error)
+	require.NotNil(t, snapshot.Tasks[1].FinishedAt)
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
+}
+
 func newOrchestrationTestCoordinator(t *testing.T) (*coordinator, string, string) {
 	t.Helper()
 	const providerID = "orchestration-provider"

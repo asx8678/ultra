@@ -652,7 +652,7 @@ func (m *Manager) impactGitFiles(ctx context.Context, options ImpactOptions) ([]
 	}
 	if base := strings.TrimSpace(options.Base); base != "" {
 		if strings.HasPrefix(base, "-") {
-			return nil, errors.New("Git base revision must not start with a dash")
+			return nil, errors.New("git base revision must not start with a dash")
 		}
 		paths, err := m.gitPathList(ctx, "diff", "--name-only", "-z", base+"...HEAD", "--")
 		if err != nil {
@@ -963,20 +963,4 @@ func cloneFileFacts(facts FileFacts) FileFacts {
 func cloneCoverage(coverage Coverage) Coverage {
 	coverage.Warnings = append([]string(nil), coverage.Warnings...)
 	return coverage
-}
-
-func nodeLess(left, right Node) bool {
-	if left.Path != right.Path {
-		return left.Path < right.Path
-	}
-	if left.Line != right.Line {
-		return left.Line < right.Line
-	}
-	if left.Kind != right.Kind {
-		return left.Kind < right.Kind
-	}
-	if left.Name != right.Name {
-		return left.Name < right.Name
-	}
-	return left.ID < right.ID
 }

@@ -35,6 +35,7 @@ func TestBoundedCommandOutput(t *testing.T) {
 	t.Parallel()
 
 	t.Run("accepts bounded output", func(t *testing.T) {
+		t.Parallel()
 		command := boundedOutputHelperCommand(t.Context(), "small")
 		output, stderr, err := boundedCommandOutput(t.Context(), command, 16)
 		require.NoError(t, err)
@@ -43,6 +44,7 @@ func TestBoundedCommandOutput(t *testing.T) {
 	})
 
 	t.Run("rejects oversized output without waiting for the writer", func(t *testing.T) {
+		t.Parallel()
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		command := boundedOutputHelperCommand(ctx, "large")
@@ -53,6 +55,7 @@ func TestBoundedCommandOutput(t *testing.T) {
 	})
 
 	t.Run("bounds stderr", func(t *testing.T) {
+		t.Parallel()
 		command := boundedOutputHelperCommand(t.Context(), "stderr")
 		_, stderr, err := boundedCommandOutput(t.Context(), command, 16)
 		require.Error(t, err)
@@ -375,7 +378,7 @@ func TestManagerImpactUsesBoundedGitCochangeHistory(t *testing.T) {
 	root := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
-		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...)
 		output, err := command.CombinedOutput()
 		require.NoError(t, err, string(output))
 	}
@@ -408,7 +411,7 @@ func TestManagerImpactDiscoversUncommittedGitFiles(t *testing.T) {
 	root := t.TempDir()
 	runGit := func(args ...string) {
 		t.Helper()
-		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...)
 		output, err := command.CombinedOutput()
 		require.NoError(t, err, string(output))
 	}
