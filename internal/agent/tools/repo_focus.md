@@ -1,0 +1,3 @@
+Focus the repository graph on a symbol, route, file, environment key, literal, or concept.
+
+The result contains exact source locations, typed causal relationships, deterministic relevance ordering, and suggested read windows across supported languages. Approximate names can resolve to close symbols. A semantic result establishes session-scoped progressive disclosure for repo_dwell. On a graph miss, a bounded native text fallback can return matches from unsupported file types; fallback matches should be opened from their suggested reads and cannot be expanded with repo_dwell. Call repo_focus and repo_dwell sequentially, never concurrently or in Promise.all.

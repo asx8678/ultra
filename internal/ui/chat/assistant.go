@@ -231,12 +231,11 @@ func NewAssistantMessageItem(sty *styles.Styles, message *message.Message) Messa
 	}
 
 	a.anim = anim.New(anim.Settings{
-		ID:          a.ID(),
-		Size:        15,
-		GradColorA:  sty.WorkingGradFromColor,
-		GradColorB:  sty.WorkingGradToColor,
-		LabelColor:  sty.WorkingLabelColor,
-		CycleColors: true,
+		ID:         a.ID(),
+		Label:      "Thinking",
+		LabelColor: sty.WorkingLabelColor,
+		NoScramble: true,
+		CalmPulse:  true,
 		Suffix: func() string {
 			return common.Elapsed()
 		},

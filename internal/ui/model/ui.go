@@ -1570,9 +1570,18 @@ func (m *UI) loadNestedToolCalls(items []chat.MessageItem) {
 
 func (m *UI) loadNestedToolContainer(nestedContainer chat.NestedToolContainer, toolItem chat.ToolMessageItem) {
 	tc := toolItem.ToolCall()
-	agentSessionID := m.com.Workspace.CreateAgentToolSessionID(toolItem.MessageID(), tc.ID)
-	nestedMsgs, err := m.com.Workspace.ListMessages(context.Background(), agentSessionID)
-	if err != nil || len(nestedMsgs) == 0 {
+	sessionIDs := []string{m.com.Workspace.CreateAgentToolSessionID(toolItem.MessageID(), tc.ID)}
+	if agentItem, ok := toolItem.(*chat.AgentToolMessageItem); ok {
+		sessionIDs = agentItem.ChildSessionIDs(m.com.Workspace.CreateAgentToolSessionID)
+	}
+	var nestedMsgs []message.Message
+	for _, sessionID := range sessionIDs {
+		messages, err := m.com.Workspace.ListMessages(context.Background(), sessionID)
+		if err == nil {
+			nestedMsgs = append(nestedMsgs, messages...)
+		}
+	}
+	if len(nestedMsgs) == 0 {
 		return
 	}
 
@@ -1857,12 +1866,20 @@ func (m *UI) handleChildSessionMessage(event pubsub.Event[message.Message]) tea.
 	}
 
 	// Find the delegated agent inside either a standalone item or a grouped
-	// execution forest. Session parsing provides the authoritative parent ID.
-	owner := m.chat.MessageItem(toolCallID)
-	if owner == nil {
-		return nil
+	// execution forest. Structured orchestration appends "-<task-id>" to the
+	// outer tool-call ID, so progressively trim suffixes until the owner alias
+	// registered in the chat is found.
+	ownerToolCallID := toolCallID
+	owner := m.chat.MessageItem(ownerToolCallID)
+	for owner == nil {
+		separator := strings.LastIndex(ownerToolCallID, "-")
+		if separator < 0 {
+			return nil
+		}
+		ownerToolCallID = ownerToolCallID[:separator]
+		owner = m.chat.MessageItem(ownerToolCallID)
 	}
-	agentItem := chat.ResolveNestedToolContainer(owner, toolCallID)
+	agentItem := chat.ResolveNestedToolContainer(owner, ownerToolCallID)
 	if agentItem == nil {
 		return nil
 	}
@@ -1909,7 +1926,7 @@ func (m *UI) handleChildSessionMessage(event pubsub.Event[message.Message]) tea.
 	// animation events route to the containing list entry.
 	agentItem.SetNestedTools(nestedTools)
 	chat.TouchGroup(owner)
-	m.chat.UpdateNestedToolIDs(toolCallID)
+	m.chat.UpdateNestedToolIDs(ownerToolCallID)
 
 	if m.chat.Follow() {
 		if cmd := m.chat.ScrollToBottomAndSelectLast(); cmd != nil {

@@ -2,6 +2,8 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -119,6 +121,68 @@ func (a *AgentToolMessageItem) AddNestedTool(tool ToolMessageItem) {
 	a.Bump()
 }
 
+// ChildSessionIDs returns every child session owned by this agent call. The
+// completed structured result is authoritative; input-derived IDs cover live
+// and interrupted runs before a result has been recorded.
+func (a *AgentToolMessageItem) ChildSessionIDs(
+	createID func(messageID, toolCallID string) string,
+) []string {
+	if a.result != nil {
+		var snapshot agent.AgentRunSnapshot
+		if json.Unmarshal([]byte(a.result.Content), &snapshot) == nil {
+			var sessionIDs []string
+			for _, task := range snapshot.Tasks {
+				if task.SessionID != "" && !slices.Contains(sessionIDs, task.SessionID) {
+					sessionIDs = append(sessionIDs, task.SessionID)
+				}
+			}
+			if len(sessionIDs) > 0 {
+				return sessionIDs
+			}
+		}
+	}
+
+	var params agent.AgentParams
+	if json.Unmarshal([]byte(a.toolCall.Input), &params) != nil {
+		return nil
+	}
+	legacy := params.Action == "" && params.Prompt != "" && len(params.Tasks) == 0 &&
+		params.Mode == "" && params.Concurrency == 0 && !params.Background &&
+		params.TokenBudget == 0 && params.SynthesisPrompt == ""
+	if legacy {
+		return []string{createID(a.messageID, a.toolCall.ID)}
+	}
+
+	toolCallIDs := make([]string, 0, len(params.Tasks)+1)
+	if len(params.Tasks) == 0 && params.Prompt != "" {
+		toolCallIDs = append(toolCallIDs, a.toolCall.ID+"-task")
+	}
+	known := make(map[string]struct{}, len(params.Tasks)+1)
+	for i, task := range params.Tasks {
+		id := strings.TrimSpace(task.ID)
+		if id == "" {
+			id = fmt.Sprintf("task-%d", i+1)
+		}
+		known[id] = struct{}{}
+		toolCallIDs = append(toolCallIDs, a.toolCall.ID+"-"+id)
+	}
+	if strings.EqualFold(params.Mode, "council") && len(params.Tasks) > 0 {
+		judgeID := "synthesis"
+		for suffix := 2; ; suffix++ {
+			if _, exists := known[judgeID]; !exists {
+				break
+			}
+			judgeID = fmt.Sprintf("synthesis-%d", suffix)
+		}
+		toolCallIDs = append(toolCallIDs, a.toolCall.ID+"-"+judgeID)
+	}
+	sessionIDs := make([]string, 0, len(toolCallIDs))
+	for _, toolCallID := range toolCallIDs {
+		sessionIDs = append(sessionIDs, createID(a.messageID, toolCallID))
+	}
+	return sessionIDs
+}
+
 // AgentToolRenderContext renders agent tool messages.
 type AgentToolRenderContext struct {
 	agent *AgentToolMessageItem
@@ -130,7 +194,7 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	var params agent.AgentParams
 	_ = json.Unmarshal([]byte(opts.ToolCall.Input), &params)
 
-	prompt := params.Prompt
+	prompt := agentPromptSummary(params)
 	if !opts.ExpandedContent {
 		prompt = strings.ReplaceAll(prompt, "\n", " ")
 	}
@@ -170,6 +234,27 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	}
 
 	return result
+}
+
+func agentPromptSummary(params agent.AgentParams) string {
+	if params.Prompt != "" {
+		return params.Prompt
+	}
+	if len(params.Tasks) > 0 {
+		mode := strings.ToLower(strings.TrimSpace(params.Mode))
+		if mode == "" {
+			mode = "parallel"
+		}
+		return fmt.Sprintf("%s · %d tasks", mode, len(params.Tasks))
+	}
+	action := strings.ToLower(strings.TrimSpace(params.Action))
+	if action == "" {
+		action = "run"
+	}
+	if params.RunID != "" {
+		return action + " · " + params.RunID
+	}
+	return action
 }
 
 func renderAgentCard(sty *styles.Styles, status ToolStatus, name, prompt string, width int) string {

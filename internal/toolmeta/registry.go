@@ -23,6 +23,7 @@ type Descriptor struct {
 	SubagentSafe   bool
 	TaskDefault    bool
 	DefaultEnabled bool
+	Ordered        bool
 }
 
 var descriptors = []Descriptor{
@@ -51,6 +52,10 @@ var descriptors = []Descriptor{
 	{Name: "agentic_fetch", Group: "network", Effects: EffectRead | EffectNetwork, SubagentSafe: true, DefaultEnabled: true},
 	{Name: "glob", Group: "core", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true},
 	{Name: "grep", Group: "core", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true},
+	{Name: "repo_sketch", Group: "repo", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true},
+	{Name: "repo_focus", Group: "repo", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true, Ordered: true},
+	{Name: "repo_dwell", Group: "repo", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true, Ordered: true},
+	{Name: "repo_impact", Group: "repo", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true},
 	{Name: "ls", Group: "core", Effects: EffectRead, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true},
 	{Name: "question", Group: "interactive", Effects: EffectRead, Interactive: true, DefaultEnabled: true},
 	{Name: "sourcegraph", Group: "network", Effects: EffectRead | EffectNetwork, SubagentSafe: true, TaskDefault: true, DefaultEnabled: true},

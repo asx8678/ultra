@@ -13,6 +13,7 @@
 - **Flexible:** switch LLMs mid-session while preserving context
 - **Session-Based:** maintain multiple work sessions and contexts per project
 - **LSP-Enhanced:** Ultra uses LSPs for additional context, just like you do
+- **Repository-Aware:** a native cross-language semantic graph provides token-bounded architecture sketches, focused neighborhoods, progressive context, and change-impact analysis
 - **Extensible:** add capabilities via MCPs (`http`, `stdio`, and `sse`)
 - **Works Everywhere:** first-class support in every terminal on macOS, Linux, Windows (PowerShell and WSL), Android, FreeBSD, OpenBSD, and NetBSD
 - **Industrial Grade:** built on the Charm ecosystem, powering 25k+ applications, from leading open source projects to business-critical infrastructure
@@ -202,6 +203,63 @@ option fabric false
 For specialized sandbox-free builds, compile with `-tags fabric_disabled`.
 Fabric defaults off in those builds; explicitly enabling it fails closed during
 agent initialization.
+
+### Native Multi-Agent Runtime
+
+Ultra's `agent` tool is a native Go 1.27 orchestration runtime. It remains
+directly available when Fabric is enabled and does not generate, transpile, or
+execute TypeScript. Prompt-only calls preserve the original single-worker
+behavior. Structured calls support:
+
+- bounded parallel, sequential, dependency-graph, and council workflows;
+- background `spawn`, `status`, `wait`, `list`, and `cancel` operations;
+- configured `large` or `small` models, per-worker safe tool allowlists,
+  working directories, timeouts, and output limits;
+- bounded recursive delegation with a maximum depth of three;
+- hard aggregate output-token allowances and structured task results; and
+- supervised run snapshots under the Ultra data directory at
+  `agents/runs/<run_id>.json`. In-flight work found after a restart is retained
+  as `interrupted` rather than silently lost.
+
+The task dependency graph is validated before any model request. Dependency
+outputs are passed to downstream workers, failed dependencies skip their
+consumers, and child-session cost updates are serialized before accumulation.
+
+### Semantic Repository Graph
+
+Ultra includes a native Go 1.27 semantic repository graph. It indexes symbols,
+imports, calls, inheritance, tests, routes, configuration keys, and distinctive
+literals across common compiled, scripting, and web languages. Go extraction
+uses the standard-library AST; TypeScript/JavaScript (including Svelte, Vue, and
+Astro script regions), Python, Rust, Java, Kotlin, Ruby, and shell use
+deterministic language-specific extractors. Elixir, C, C++, Lua, PHP, Swift,
+Scala, and Haskell contribute outline symbols and imports. HCL,
+env, YAML, JSON, TOML, and Markdown contribute configuration outlines and
+literal joins without claiming compiler-level precision. The graph
+complements exact search and LSP queries; results include ranked relationships
+and bounded source windows for follow-up reads.
+
+Four read-only tools are enabled for coder and task agents:
+
+- `repo_sketch` returns a token-bounded architecture silhouette;
+- `repo_focus` resolves a symbol, route, file, or concept and ranks its semantic
+  neighborhood;
+- `repo_dwell` progressively widens the previous focus for the same session; and
+- `repo_impact` ranks likely blast radius from files, symbols, uncommitted Git
+  changes, a base revision, and bounded recency-weighted co-change history.
+
+Focus falls back to bounded, gitignore-aware native literal search across safe
+regular text on a graph miss, including file types outside the semantic tier.
+Every result reports indexed, skipped, and omitted coverage, and progressive
+disclosure only accounts for hits actually visible within the output budget.
+
+The cache is scoped per canonical Git worktree, persisted under Ultra's data
+directory, and refreshed incrementally from content hashes. Symlinks,
+generated files, binaries, ignored paths, runtime state, and oversized files are
+excluded; indexing is capped at 8,000 supported files and 128 MiB of source
+per worktree. The same operations are captured as `host.repo_*` actions in
+Fabric mode; `focus` must precede `dwell`, and those two operations are
+intentionally non-commutative.
 
 ### Environment Variables
 

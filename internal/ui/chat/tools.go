@@ -1278,7 +1278,18 @@ func (t *baseToolMessageItem) formatParametersForCopy() string {
 	case agent.AgentToolName:
 		var params agent.AgentParams
 		if json.Unmarshal([]byte(t.toolCall.Input), &params) == nil {
-			return fmt.Sprintf("**Task:**\n%s", params.Prompt)
+			if len(params.Tasks) == 0 {
+				return fmt.Sprintf("**Agent:** %s", agentPromptSummary(params))
+			}
+			parts := []string{fmt.Sprintf("**Workflow:** %s", agentPromptSummary(params))}
+			for i, task := range params.Tasks {
+				id := task.ID
+				if id == "" {
+					id = fmt.Sprintf("task-%d", i+1)
+				}
+				parts = append(parts, fmt.Sprintf("**%s:** %s", id, task.Prompt))
+			}
+			return strings.Join(parts, "\n")
 		}
 	}
 

@@ -26,6 +26,7 @@ func TestTaskDefaultsPreserveConservativeSurface(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, []string{
 		"lsp_symbols", "lsp_definition", "lsp_call_hierarchy",
-		"glob", "grep", "ls", "sourcegraph", "view",
+		"glob", "grep", "repo_sketch", "repo_focus", "repo_dwell", "repo_impact",
+		"ls", "sourcegraph", "view",
 	}, TaskDefaultNames())
 }

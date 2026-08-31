@@ -29,6 +29,7 @@ const (
 	// If the FPS is 20 (50 milliseconds) this means that the ellipsis will
 	// change every 8 frames (400 milliseconds).
 	ellipsisAnimSpeed = 8
+	calmPulseSpeed    = 8
 
 	// The maximum number of animation steps that can pass before a
 	// character appears. With fps == 20 this is ~1s of staggered
@@ -55,8 +56,9 @@ var (
 )
 
 var (
-	availableRunes = []rune("0123456789abcdefABCDEF~!@#$£€%^&*()+=_")
-	ellipsisFrames = []string{".", "..", "...", ""}
+	availableRunes  = []rune("0123456789abcdefABCDEF~!@#$£€%^&*()+=_")
+	ellipsisFrames  = []string{".", "..", "...", ""}
+	calmPulseFrames = []string{"·", "•", "●", "•"}
 )
 
 // Internal ID management. Used during animating to ensure that frame messages
@@ -82,8 +84,8 @@ var animCacheMap = csync.NewMap[string, *animCache]()
 // settingsHash creates a hash key for the settings to use for caching
 func settingsHash(opts Settings) string {
 	h := xxh3.New()
-	fmt.Fprintf(h, "%d-%s-%v-%v-%v-%t-%v",
-		opts.Size, opts.Label, opts.LabelColor, opts.GradColorA, opts.GradColorB, opts.CycleColors, opts.SuffixColor)
+	fmt.Fprintf(h, "%d-%s-%v-%v-%v-%t-%t-%t-%v",
+		opts.Size, opts.Label, opts.LabelColor, opts.GradColorA, opts.GradColorB, opts.CycleColors, opts.NoScramble, opts.CalmPulse, opts.SuffixColor)
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -110,9 +112,12 @@ type Settings struct {
 
 	// NoScramble disables the scrambled rune animation. The cycling
 	// character region is removed entirely so only the label and its
-	// animated ellipsis are visible. Useful for non-LLM contexts where
-	// scrambled glyphs imply "thinking" rather than "running".
+	// activity indicator are visible.
 	NoScramble bool
+
+	// CalmPulse prefixes a slow single-dot breathing indicator. It is intended
+	// for long-running cognitive work where rapid or noisy motion is distracting.
+	CalmPulse bool
 
 	// Suffix is an optional function that returns a dynamic suffix string
 	// to render after the label and ellipsis. Called on every Render().
@@ -144,6 +149,7 @@ type Anim struct {
 	id               string
 	suffix           func() string
 	suffixColor      color.Color
+	calmPulse        bool
 
 	// gen identifies the currently armed tick chain. Start() bumps it and
 	// stamps every emitted StepMsg with the new value; Animate() drops ticks
@@ -181,6 +187,7 @@ func New(opts Settings) *Anim {
 		a.cyclingCharWidth = opts.Size
 	}
 	a.labelColor = opts.LabelColor
+	a.calmPulse = opts.CalmPulse
 
 	// Store the suffix function if provided.
 	if opts.Suffix != nil {
@@ -444,6 +451,12 @@ func (a *Anim) Animate(msg StepMsg) tea.Cmd {
 func (a *Anim) Render() string {
 	var b strings.Builder
 	step := int(a.step.Load())
+	if a.calmPulse {
+		pulseStep := int(a.framesSinceStart.Load()) / calmPulseSpeed
+		pulse := calmPulseFrames[pulseStep%len(calmPulseFrames)]
+		b.WriteString(lipgloss.NewStyle().Foreground(a.labelColor).Render(pulse))
+		b.WriteString(labelGap)
+	}
 	frames := int(a.framesSinceStart.Load())
 	for i := range a.width {
 		switch {
@@ -467,21 +480,12 @@ func (a *Anim) Render() string {
 			}
 		}
 	}
-	// Render animated ellipsis at the end of the label if all characters
-	// have been initialized. Skip when a suffix is active to avoid visual
-	// competition between the animated dots and the timer.
-	if a.initialized.Load() && a.labelWidth > 0 {
-		showEllipsis := true
-		if a.suffix != nil {
-			if s := a.suffix(); s != "" {
-				showEllipsis = false
-			}
-		}
-		if showEllipsis {
-			ellipsisStep := int(a.ellipsisStep.Load())
-			if ellipsisFrame, ok := a.ellipsisFrames.Get(ellipsisStep / ellipsisAnimSpeed); ok {
-				b.WriteString(ellipsisFrame)
-			}
+	// Render an animated ellipsis when the calm pulse is not active. Each
+	// mode has only one moving element, avoiding competing visual motion.
+	if a.initialized.Load() && a.labelWidth > 0 && !a.calmPulse {
+		ellipsisStep := int(a.ellipsisStep.Load())
+		if ellipsisFrame, ok := a.ellipsisFrames.Get(ellipsisStep / ellipsisAnimSpeed); ok {
+			b.WriteString(ellipsisFrame)
 		}
 	}
 

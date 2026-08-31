@@ -330,6 +330,16 @@ func fabricRisk(metadata toolmeta.Descriptor) fabric.RiskClass {
 
 func fabricEffect(metadata toolmeta.Descriptor) *fabric.EffectDescriptor {
 	if metadata.Effects == toolmeta.EffectRead {
+		if metadata.Ordered {
+			// Ordered read tools mutate session-scoped read state (for example,
+			// repo_focus establishes the cursor consumed by repo_dwell). EffectNone
+			// is intentionally exempt from Fabric conflict tracking, so represent
+			// that state transition as a bounded emission instead.
+			return &fabric.EffectDescriptor{
+				Kind:      fabric.EffectEmission,
+				Resources: []string{"ordered-read-state"},
+			}
+		}
 		return &fabric.EffectDescriptor{Kind: fabric.EffectNone, Commutative: true}
 	}
 	if metadata.Effects == toolmeta.EffectWrite {

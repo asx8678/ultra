@@ -12,6 +12,7 @@ import (
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/bedrock"
 	"charm.land/fantasy/providers/openaicompat"
+	agenttools "github.com/asx8678/ultra/internal/agent/tools"
 	"github.com/asx8678/ultra/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,6 +87,36 @@ func agentResultWithText(text string) *fantasy.AgentResult {
 			},
 		},
 	}
+}
+
+func TestCoordinatorBuildToolsSharesSemanticGraphManager(t *testing.T) {
+	t.Parallel()
+	env := testEnv(t)
+	coord := newTestCoordinator(t, env, "test-provider", config.ProviderConfig{ID: "test-provider"})
+	first, err := coord.repoGraphManager(env.workingDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, coord.Close()) })
+	second, err := coord.repoGraphManager(env.workingDir)
+	require.NoError(t, err)
+	require.Same(t, first, second)
+
+	built, err := coord.buildTools(t.Context(), config.Agent{AllowedTools: []string{
+		agenttools.RepoSketchToolName,
+		agenttools.RepoFocusToolName,
+		agenttools.RepoDwellToolName,
+		agenttools.RepoImpactToolName,
+	}}, false)
+	require.NoError(t, err)
+	names := make([]string, 0, len(built))
+	for _, tool := range built {
+		names = append(names, tool.Info().Name)
+	}
+	require.Equal(t, []string{
+		agenttools.RepoDwellToolName,
+		agenttools.RepoFocusToolName,
+		agenttools.RepoImpactToolName,
+		agenttools.RepoSketchToolName,
+	}, names)
 }
 
 func TestRunSubAgent(t *testing.T) {

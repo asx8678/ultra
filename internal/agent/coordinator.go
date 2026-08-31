@@ -33,6 +33,7 @@ import (
 	"github.com/asx8678/ultra/internal/permission"
 	"github.com/asx8678/ultra/internal/pubsub"
 	"github.com/asx8678/ultra/internal/question"
+	"github.com/asx8678/ultra/internal/repograph"
 	"github.com/asx8678/ultra/internal/session"
 	"github.com/asx8678/ultra/internal/skills"
 	"golang.org/x/sync/errgroup"
@@ -112,6 +113,13 @@ type coordinator struct {
 	runtimeConfigGeneration uint64
 	runtimeMCPGeneration    uint64
 	fabricRuntime           fabricRuntime
+
+	orchestratorMu sync.Mutex
+	orchestrator   *agentOrchestrator
+	costMu         sync.Mutex
+
+	repoGraphMu sync.Mutex
+	repoGraphs  map[string]*repograph.Manager
 }
 
 // CoordinatorOptions holds the dependencies for NewCoordinator. Using a
@@ -158,6 +166,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		notify:       opts.Notify,
 		runComplete:  opts.RunComplete,
 		agents:       make(map[string]SessionAgent),
+		repoGraphs:   make(map[string]*repograph.Manager),
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
 		skillTracker: skillTracker,
@@ -652,6 +661,15 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 }
 
 func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubAgent bool) ([]fantasy.AgentTool, error) {
+	return c.buildToolsAt(ctx, agent, isSubAgent, c.cfg.WorkingDir())
+}
+
+func (c *coordinator) buildToolsAt(
+	ctx context.Context,
+	agent config.Agent,
+	isSubAgent bool,
+	workingDir string,
+) ([]fantasy.AgentTool, error) {
 	var allTools []fantasy.AgentTool
 	if slices.Contains(agent.AllowedTools, AgentToolName) {
 		agentTool, err := c.agentTool(ctx)
@@ -682,27 +700,44 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	// Build hook runner if PreToolUse hooks are configured.
 	var hookRunner *hooks.Runner
 	if preToolHooks := c.cfg.Config().Hooks[hooks.EventPreToolUse]; len(preToolHooks) > 0 {
-		hookRunner = hooks.NewRunner(preToolHooks, c.cfg.WorkingDir(), c.cfg.WorkingDir())
+		hookRunner = hooks.NewRunner(preToolHooks, workingDir, workingDir)
+	}
+
+	if slices.ContainsFunc(agent.AllowedTools, func(name string) bool {
+		return name == tools.RepoSketchToolName || name == tools.RepoFocusToolName ||
+			name == tools.RepoDwellToolName || name == tools.RepoImpactToolName
+	}) {
+		repoGraph, err := c.repoGraphManager(workingDir)
+		if err != nil {
+			return nil, fmt.Errorf("initialize repository graph: %w", err)
+		}
+		allTools = append(
+			allTools,
+			tools.NewRepoSketchTool(repoGraph),
+			tools.NewRepoFocusTool(repoGraph),
+			tools.NewRepoDwellTool(repoGraph),
+			tools.NewRepoImpactTool(repoGraph),
+		)
 	}
 
 	allTools = append(
 		allTools,
-		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.Attribution, modelID),
+		tools.NewBashTool(c.permissions, workingDir, c.cfg.Config().Options.Attribution, modelID),
 		tools.NewUltraInfoTool(c.cfg, c.lspManager, c.allSkills, c.activeSkills, c.skillTracker),
 		tools.NewUltraLogsTool(logFile),
 		tools.NewJobOutputTool(),
 		tools.NewJobKillTool(),
-		tools.NewDownloadTool(c.permissions, c.cfg.WorkingDir(), nil),
-		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
-		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
-		tools.NewFetchTool(c.permissions, c.cfg.WorkingDir(), nil),
-		tools.NewGlobTool(c.cfg.WorkingDir(), c.cfg.Config().Tools.Glob),
-		tools.NewGrepTool(c.cfg.WorkingDir(), c.cfg.Config().Tools.Grep),
-		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
+		tools.NewDownloadTool(c.permissions, workingDir, nil),
+		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, workingDir),
+		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, workingDir),
+		tools.NewFetchTool(c.permissions, workingDir, nil),
+		tools.NewGlobTool(workingDir, c.cfg.Config().Tools.Glob),
+		tools.NewGrepTool(workingDir, c.cfg.Config().Tools.Grep),
+		tools.NewLsTool(c.permissions, workingDir, c.cfg.Config().Tools.Ls),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
-		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
+		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, workingDir, c.cfg.Config().Options.SkillsPaths...),
+		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, workingDir),
 	)
 
 	// Question tool is interactive-only and not available to sub-agents.
@@ -740,7 +775,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		}
 	}
 
-	for _, tool := range tools.GetMCPTools(c.permissions, c.cfg, c.cfg.WorkingDir()) {
+	for _, tool := range tools.GetMCPTools(c.permissions, c.cfg, workingDir) {
 		if agent.AllowedMCP == nil {
 			// No MCP restrictions
 			filteredTools = append(filteredTools, tool)
@@ -795,14 +830,19 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	return tools.NewCatalog(filteredTools).Tools(), nil
 }
 
-// modelFacingTools enforces Code Mode at the model boundary. Native tools stay
-// registered in Fabric so nested calls retain hooks and policy checks, but an
-// enabled top-level coder can only request the fabric_exec envelope directly.
+// modelFacingTools enforces Code Mode for ordinary host capabilities while
+// keeping native Go agent orchestration directly available. Agent fan-out must
+// not require generating or executing TypeScript.
 func modelFacingTools(nativeTools, fabricTools []fantasy.AgentTool, fabricEnabled bool) []fantasy.AgentTool {
-	if fabricEnabled {
-		return fabricTools
+	if !fabricEnabled {
+		return nativeTools
 	}
-	return nativeTools
+	for _, tool := range nativeTools {
+		if tool != nil && tool.Info().Name == AgentToolName {
+			return append(slices.Clone(fabricTools), tool)
+		}
+	}
+	return fabricTools
 }
 
 // BeginAccepted reserves an accept slot for sessionID on the active
@@ -822,16 +862,57 @@ func (c *coordinator) CancelAll() {
 	c.currentAgent.CancelAll()
 }
 
+func (c *coordinator) repoGraphManager(workingDir string) (*repograph.Manager, error) {
+	root, err := repograph.CanonicalRoot(workingDir)
+	if err != nil {
+		return nil, err
+	}
+
+	c.repoGraphMu.Lock()
+	defer c.repoGraphMu.Unlock()
+	if c.repoGraphs == nil {
+		c.repoGraphs = make(map[string]*repograph.Manager)
+	}
+	if existing := c.repoGraphs[root]; existing != nil {
+		return existing, nil
+	}
+	manager, err := repograph.NewManager(
+		root,
+		filepath.Join(c.cfg.Config().Options.DataDirectory, "repo-graph"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.repoGraphs[root] = manager
+	return manager, nil
+}
+
 // Close releases optional coordinator-owned runtimes after active runs stop.
 func (c *coordinator) Close() error {
-	c.runtimeMu.Lock()
-	defer c.runtimeMu.Unlock()
-	if c.fabricRuntime == nil {
-		return nil
+	c.orchestratorMu.Lock()
+	if c.orchestrator != nil {
+		c.orchestrator.Close()
+		c.orchestrator = nil
 	}
-	err := c.fabricRuntime.Close()
-	c.fabricRuntime = nil
-	return err
+	c.orchestratorMu.Unlock()
+
+	c.repoGraphMu.Lock()
+	var closeErrors []error
+	for root, manager := range c.repoGraphs {
+		if err := manager.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close repository graph %q: %w", root, err))
+		}
+		delete(c.repoGraphs, root)
+	}
+	c.repoGraphMu.Unlock()
+
+	c.runtimeMu.Lock()
+	if c.fabricRuntime != nil {
+		closeErrors = append(closeErrors, c.fabricRuntime.Close())
+		c.fabricRuntime = nil
+	}
+	c.runtimeMu.Unlock()
+	return errors.Join(closeErrors...)
 }
 
 func (c *coordinator) ClearQueue(sessionID string) {
@@ -1050,12 +1131,13 @@ func (c *coordinator) refreshApiKeyTemplate(ctx context.Context, providerCfg con
 
 // subAgentParams holds the parameters for running a sub-agent.
 type subAgentParams struct {
-	Agent          SessionAgent
-	SessionID      string
-	AgentMessageID string
-	ToolCallID     string
-	Prompt         string
-	SessionTitle   string
+	Agent           SessionAgent
+	SessionID       string
+	AgentMessageID  string
+	ToolCallID      string
+	Prompt          string
+	SessionTitle    string
+	MaxOutputTokens int64
 	// SessionSetup is an optional callback invoked after session creation
 	// but before agent execution, for custom session configuration.
 	SessionSetup func(sessionID string)
@@ -1065,11 +1147,19 @@ type subAgentParams struct {
 // It creates a sub-session, runs the agent with the given prompt, and propagates
 // the cost to the parent session.
 func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (fantasy.ToolResponse, error) {
+	response, _, err := c.runSubAgentDetailed(ctx, params)
+	return response, err
+}
+
+func (c *coordinator) runSubAgentDetailed(
+	ctx context.Context,
+	params subAgentParams,
+) (fantasy.ToolResponse, fantasy.Usage, error) {
 	// Create sub-session
 	agentToolSessionID := c.sessions.CreateAgentToolSessionID(params.AgentMessageID, params.ToolCallID)
 	session, err := c.sessions.CreateTaskSession(ctx, agentToolSessionID, params.SessionID, params.SessionTitle)
 	if err != nil {
-		return fantasy.ToolResponse{}, fmt.Errorf("create session: %w", err)
+		return fantasy.ToolResponse{}, fantasy.Usage{}, fmt.Errorf("create session: %w", err)
 	}
 
 	// Call session setup function if provided
@@ -1083,10 +1173,13 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 	if model.ModelCfg.MaxTokens != 0 {
 		maxTokens = model.ModelCfg.MaxTokens
 	}
+	if params.MaxOutputTokens > 0 {
+		maxTokens = params.MaxOutputTokens
+	}
 
 	providerCfg, ok := c.cfg.Config().Providers.Get(model.ModelCfg.Provider)
 	if !ok {
-		return fantasy.ToolResponse{}, errModelProviderNotConfigured
+		return fantasy.ToolResponse{}, fantasy.Usage{}, errModelProviderNotConfigured
 	}
 
 	// Run the agent
@@ -1115,7 +1208,7 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		})
 	}
 	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), fantasy.Usage{}, nil
 	}
 
 	// Update parent session cost on a best-effort basis. A failure here must
@@ -1129,11 +1222,15 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		)
 	}
 
+	usage := fantasy.Usage{}
+	if result != nil {
+		usage = result.TotalUsage
+	}
 	output := subAgentOutput(result)
 	if output == "" {
-		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), nil
+		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), usage, nil
 	}
-	return fantasy.NewTextResponse(output), nil
+	return fantasy.NewTextResponse(output), usage, nil
 }
 
 func subAgentOutput(result *fantasy.AgentResult) string {
@@ -1145,6 +1242,9 @@ func subAgentOutput(result *fantasy.AgentResult) string {
 
 // updateParentSessionCost accumulates the cost from a child session to its parent session.
 func (c *coordinator) updateParentSessionCost(ctx context.Context, childSessionID, parentSessionID string) error {
+	c.costMu.Lock()
+	defer c.costMu.Unlock()
+
 	childSession, err := c.sessions.Get(ctx, childSessionID)
 	if err != nil {
 		return fmt.Errorf("get child session: %w", err)

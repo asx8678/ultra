@@ -14,6 +14,7 @@ import (
 	"github.com/asx8678/ultra/internal/fabric"
 	"github.com/asx8678/ultra/internal/hooks"
 	"github.com/asx8678/ultra/internal/permission"
+	"github.com/asx8678/ultra/internal/toolmeta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +33,19 @@ func fabricTestTool(name string, calls *atomic.Int32) fantasy.AgentTool {
 			return fantasy.NewTextResponse(name + " complete"), nil
 		},
 	)
+}
+
+func TestFabricEffectTracksOrderedReadState(t *testing.T) {
+	t.Parallel()
+
+	ordered := fabricEffect(toolmeta.Descriptor{Effects: toolmeta.EffectRead, Ordered: true})
+	require.Equal(t, fabric.EffectEmission, ordered.Kind)
+	require.Equal(t, []string{"ordered-read-state"}, ordered.Resources)
+	require.False(t, ordered.Commutative)
+
+	parallel := fabricEffect(toolmeta.Descriptor{Effects: toolmeta.EffectRead})
+	require.Equal(t, fabric.EffectNone, parallel.Kind)
+	require.True(t, parallel.Commutative)
 }
 
 func TestUltraProviderCatalogMatchesTools(t *testing.T) {

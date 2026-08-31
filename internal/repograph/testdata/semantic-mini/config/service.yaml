@@ -1,0 +1,5 @@
+service:
+  name: semantic-mini
+  audit_topic: "ORDER_AUDIT_TOPIC"
+  public_route: "/orders/{order_id}"
+  timeout_ms: 250
