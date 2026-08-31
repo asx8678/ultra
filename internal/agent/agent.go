@@ -220,6 +220,19 @@ func ValidateCall(call SessionAgentCall) error {
 	return nil
 }
 
+func outputTokenStopConditions(maxTokens int64) []fantasy.StopCondition {
+	if maxTokens <= 0 {
+		return nil
+	}
+	return []fantasy.StopCondition{func(steps []fantasy.StepResult) bool {
+		var used int64
+		for _, step := range steps {
+			used += step.Usage.OutputTokens
+		}
+		return used >= maxTokens
+	}}
+}
+
 func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *fantasy.AgentResult, retErr error) {
 	if err := ValidateCall(call); err != nil {
 		return nil, err
@@ -342,8 +355,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		agentTools[len(agentTools)-1].SetProviderOptions(a.getCacheControlOptions())
 	}
 
+	workerBudget := outputWorkerBudgetFromContext(ctx)
+	budgetedModel := withOutputBudgetModel(largeModel.Model, workerBudget)
 	agent := fantasy.NewAgent(
-		largeModel.Model,
+		budgetedModel,
 		fantasy.WithSystemPrompt(systemPrompt),
 		fantasy.WithTools(agentTools...),
 		fantasy.WithUserAgent(userAgent),
@@ -604,7 +619,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			slog.Info("ModelProvider called",
 				"provider", m.ModelCfg.Provider,
 				"model", m.ModelCfg.Model)
-			return m.Model
+			return withOutputBudgetModel(m.Model, workerBudget)
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			streamAccumulator.Checkpoint(time.Now())
@@ -695,7 +710,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			currentSession = updatedSession
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
-		StopWhen: []fantasy.StopCondition{
+		StopWhen: append(outputTokenStopConditions(call.MaxOutputTokens),
 			func(_ []fantasy.StepResult) bool {
 				cw := int64(largeModel.CatwalkCfg.ContextWindow)
 				// If context window is unknown (0), skip auto-summarize
@@ -720,7 +735,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			func(steps []fantasy.StepResult) bool {
 				return hasRepeatedToolCalls(steps, loopDetectionWindowSize, loopDetectionMaxRepeats)
 			},
-		},
+		),
 	})
 	if err != nil {
 		isHyper := largeModel.ModelCfg.Provider == hyper.Name

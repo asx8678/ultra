@@ -219,15 +219,28 @@ behavior. Structured calls support:
 - background `spawn`, `status`, `wait`, `list`, and `cancel` operations;
 - configured `large` or `small` models, per-worker safe tool allowlists,
   working directories, timeouts, and output limits;
-- bounded recursive delegation with a maximum depth of three;
-- hard aggregate output-token allowances and structured task results; and
-- supervised run snapshots under the Ultra data directory at
-  `agents/runs/<run_id>.json`. In-flight work found after a restart is retained
-  as `interrupted` rather than silently lost.
+- bounded recursive delegation with a maximum depth of three, plus 128-task
+  and 32-million-output-token lifetime caps across the complete delegation tree;
+- hard aggregate output-token allowances enforced on every provider step, with
+  separate input, output, and total usage reporting; and
+- versioned supervised run snapshots under the Ultra data directory at
+  `agents/runs/<run_id>.json`. Persisted and returned output uses the same
+  secret-redacted, bounded representation; malformed payloads are removed and
+  replaced by bounded metadata-only quarantine receipts, terminal records
+  expire after 30 days, and in-flight work found after an exclusively locked
+  restart is retained as `interrupted` rather than silently lost.
+
+`ultra runs prune` performs an explicit retention pass against local storage.
+It must be run on the host that owns the data directory; remote `--host` use is
+rejected. Use `--dry-run` to preview and `--data-dir` for custom locations.
+Structured worker transcripts are ephemeral and removed after their bounded
+result and usage are folded into the durable snapshot.
 
 The task dependency graph is validated before any model request. Dependency
-outputs are passed to downstream workers, failed dependencies skip their
-consumers, and child-session cost updates are serialized before accumulation.
+outputs are passed to downstream workers as escaped, explicitly untrusted data;
+each dependency receives a fair share of the handoff limit so none disappear
+silently. Failed dependencies skip their consumers, and child-session cost
+updates are serialized before accumulation.
 
 ### Semantic Repository Graph
 

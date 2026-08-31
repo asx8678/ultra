@@ -891,10 +891,9 @@ func (c *coordinator) repoGraphManager(workingDir string) (*repograph.Manager, e
 func (c *coordinator) Close() error {
 	c.orchestratorMu.Lock()
 	orchestrator := c.orchestrator
-	c.orchestrator = nil
 	c.orchestratorMu.Unlock()
-	// Close outside orchestratorMu: Close drains active runs, and a recursive
-	// worker needs the mutex to reach the orchestrator mid-call.
+	// Keep the closed orchestrator installed so concurrent or recursive calls
+	// cannot create a second manager over the same durable run directory.
 	var closeErrors []error
 	if orchestrator != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), defaultOrchestratorCloseWait)
@@ -902,6 +901,12 @@ func (c *coordinator) Close() error {
 			closeErrors = append(closeErrors, err)
 		}
 		cancel()
+	}
+	if len(closeErrors) > 0 {
+		// A non-cooperative worker may still be using coordinator-owned tools.
+		// Leave shared dependencies open for process teardown rather than
+		// closing them underneath that worker.
+		return errors.Join(closeErrors...)
 	}
 
 	c.repoGraphMu.Lock()
@@ -1145,6 +1150,9 @@ type subAgentParams struct {
 	Prompt          string
 	SessionTitle    string
 	MaxOutputTokens int64
+	// Ephemeral removes the child transcript after its bounded result and
+	// usage have been folded into the durable orchestration snapshot.
+	Ephemeral bool
 	// SessionSetup is an optional callback invoked after session creation
 	// but before agent execution, for custom session configuration.
 	SessionSetup func(sessionID string)
@@ -1168,6 +1176,15 @@ func (c *coordinator) runSubAgentDetailed(
 	if err != nil {
 		return fantasy.ToolResponse{}, fantasy.Usage{}, fmt.Errorf("create session: %w", err)
 	}
+	if params.Ephemeral {
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if err := c.sessions.Delete(cleanupCtx, session.ID); err != nil {
+				slog.Warn("Failed to remove ephemeral sub-agent session", "session_id", session.ID, "error", err)
+			}
+		}()
+	}
 
 	// Call session setup function if provided
 	if params.SessionSetup != nil {
@@ -1189,9 +1206,13 @@ func (c *coordinator) runSubAgentDetailed(
 		return fantasy.ToolResponse{}, fantasy.Usage{}, errModelProviderNotConfigured
 	}
 
-	// Run the agent
+	// The model wrapper enforces the aggregate allowance on every provider
+	// step rather than checking only after a possibly-overbudget step.
+	workerBudget := newOutputWorkerBudget(maxTokens)
+	runCtx := withOutputWorkerBudget(ctx, workerBudget)
+	// Run the agent.
 	run := func() (*fantasy.AgentResult, error) {
-		return params.Agent.Run(ctx, SessionAgentCall{
+		return params.Agent.Run(runCtx, SessionAgentCall{
 			SessionID:        session.ID,
 			Prompt:           params.Prompt,
 			MaxOutputTokens:  maxTokens,
@@ -1206,6 +1227,22 @@ func (c *coordinator) runSubAgentDetailed(
 		})
 	}
 	result, err := run()
+	usage := fantasy.Usage{}
+	if result != nil {
+		usage = result.TotalUsage
+	}
+	if usage.TotalTokens == 0 {
+		if child, usageErr := c.sessions.Get(context.WithoutCancel(ctx), session.ID); usageErr == nil {
+			usage.InputTokens = child.PromptTokens
+			usage.OutputTokens = child.CompletionTokens
+			usage.TotalTokens = child.PromptTokens + child.CompletionTokens
+		}
+	}
+	workerBudget.observeFallback(usage, err != nil)
+	observedUsage := workerBudget.observedUsage()
+	if observedUsage.TotalTokens > usage.TotalTokens || observedUsage.OutputTokens > usage.OutputTokens {
+		usage = observedUsage
+	}
 	// Notify only if still unauthorized after retry. AWS SSO is handled
 	// transparently inside OnAuthRefresh, so it needs no post-run notice.
 	if err != nil && isUnauthorized(err) && c.notify != nil && model.ModelCfg.Provider == hyper.Name {
@@ -1214,25 +1251,22 @@ func (c *coordinator) runSubAgentDetailed(
 			ProviderID: model.ModelCfg.Provider,
 		})
 	}
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), fantasy.Usage{}, nil
-	}
-
-	// Update parent session cost on a best-effort basis. A failure here must
-	// not discard the sub-agent output that was already produced.
-	if err := c.updateParentSessionCost(ctx, session.ID, params.SessionID); err != nil {
+	// Update parent session cost even when generation failed after consuming
+	// provider work. A failure here must not hide the original response.
+	costCtx, costCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer costCancel()
+	if costErr := c.updateParentSessionCost(costCtx, session.ID, params.SessionID); costErr != nil {
 		slog.Warn(
 			"Failed to update parent session cost",
 			"child_session", session.ID,
 			"parent_session", params.SessionID,
-			"error", err,
+			"error", costErr,
 		)
 	}
-
-	usage := fantasy.Usage{}
-	if result != nil {
-		usage = result.TotalUsage
+	if err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), usage, nil
 	}
+
 	output := subAgentOutput(result)
 	if output == "" {
 		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), usage, nil

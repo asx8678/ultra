@@ -73,6 +73,7 @@ func init() {
 		schemaCmd,
 		loginCmd,
 		sessionCmd,
+		runsCmd,
 	)
 }
 
@@ -972,15 +973,13 @@ func resolveWorkspaceSessionID(ctx context.Context, ws workspace.Workspace, id s
 func ResolveCwd(cmd *cobra.Command) (string, error) {
 	cwd, _ := cmd.Flags().GetString("cwd")
 	if cwd != "" {
-		err := os.Chdir(cwd)
-		if err != nil {
+		if err := os.Chdir(cwd); err != nil {
 			return "", fmt.Errorf("failed to change directory: %v", err)
 		}
-		return cwd, nil
 	}
-	cwd, err := os.Getwd()
+	resolved, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("failed to get current working directory: %v", err)
 	}
-	return cwd, nil
+	return resolved, nil
 }

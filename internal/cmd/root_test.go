@@ -2,11 +2,30 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolveCwdReturnsCanonicalCurrentDirectory(t *testing.T) {
+	original, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
+	base := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(base, "child"), 0o755))
+	require.NoError(t, os.Chdir(base))
+	cmd := &cobra.Command{}
+	cmd.Flags().String("cwd", "", "")
+	require.NoError(t, cmd.Flags().Set("cwd", "child"))
+	resolved, err := ResolveCwd(cmd)
+	require.NoError(t, err)
+	require.True(t, filepath.IsAbs(resolved))
+	require.Equal(t, filepath.Join(base, "child"), resolved)
+}
 
 // TestPrependStdinBounds verifies that piped input larger than
 // maxStdinBytes is rejected instead of being read unbounded into memory.

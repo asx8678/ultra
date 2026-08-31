@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/asx8678/ultra/internal/agent/tools"
 	"github.com/asx8678/ultra/internal/config"
+	"github.com/asx8678/ultra/internal/lock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +66,15 @@ func TestNormalizeAgentPlan(t *testing.T) {
 			{ID: "b", Prompt: "two", DependsOn: []string{"a"}},
 		}})
 		require.ErrorContains(t, err, "cycle")
+	})
+
+	t.Run("duplicate dependency rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := normalizeAgentPlan(AgentParams{Tasks: []AgentTask{
+			{ID: "a", Prompt: "one"},
+			{ID: "b", Prompt: "two", DependsOn: []string{"a", "a"}},
+		}})
+		require.ErrorContains(t, err, "duplicate dependency")
 	})
 }
 
@@ -465,7 +476,11 @@ func TestPromptWithDependenciesEscapesInjectionAndPreservesUTF8(t *testing.T) {
 	require.Contains(t, prompt, `\u003c/dependency_results\u003e`)
 	require.Contains(t, prompt, `"truncated":true`)
 	require.True(t, strings.Contains(prompt, "界"))
-	require.True(t, json.Valid([]byte(prompt[strings.Index(prompt, "{"):])))
+	jsonStart := strings.Index(prompt, "{")
+	jsonEnd := strings.Index(prompt, "\nEND UNTRUSTED DEPENDENCY DATA")
+	require.NotEqual(t, -1, jsonStart)
+	require.Greater(t, jsonEnd, jsonStart)
+	require.True(t, json.Valid([]byte(prompt[jsonStart:jsonEnd])))
 }
 
 func TestAgentRunPersistenceClosesStaleTasksInTerminalRuns(t *testing.T) {
@@ -491,8 +506,341 @@ func TestAgentRunPersistenceClosesStaleTasksInTerminalRuns(t *testing.T) {
 	require.NotNil(t, snapshot.Tasks[1].FinishedAt)
 }
 
+func TestAgentWorkerPanicBecomesFailedTask(t *testing.T) {
+	coord, parentID, providerID := newOrchestrationTestCoordinator(t)
+	agent := newMockAgent(providerID, 256, func(context.Context, SessionAgentCall) (*fantasy.AgentResult, error) {
+		panic("worker boom")
+	})
+
+	response := invokeAgentTool(t, coord.newAgentTool(agent), parentID, AgentParams{
+		Tasks: []AgentTask{{ID: "panic", Prompt: "panic"}},
+	})
+	require.False(t, response.IsError, response.Content)
+	var snapshot AgentRunSnapshot
+	require.NoError(t, json.Unmarshal([]byte(response.Content), &snapshot))
+	require.Equal(t, AgentRunFailed, snapshot.State)
+	require.Equal(t, AgentTaskFailed, snapshot.Tasks[0].State)
+	require.Contains(t, snapshot.Tasks[0].Error, "worker boom")
+}
+
+func TestAgentOrchestratorWaitPrefersCompletedRun(t *testing.T) {
+	manager := newAgentOrchestrator(t.TempDir())
+	job, err := manager.Start(t.Context(), AgentRunSnapshot{
+		RunID: "agent-wait-complete", State: AgentRunQueued, ParentSessionID: "parent", StartedAt: time.Now().UTC(),
+	}, normalizedAgentPlan{Mode: "parallel", Concurrency: 1}, func(context.Context, *agentRun) {})
+	require.NoError(t, err)
+	<-job.done
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = manager.Wait(ctx, "agent-wait-complete", "parent")
+	require.NoError(t, err)
+}
+
+func TestResolveAgentToolsExplicitEmptyMeansNoTools(t *testing.T) {
+	coord, _, _ := newOrchestrationTestCoordinator(t)
+	resolved, err := coord.resolveAgentTools([]string{"view"}, []string{})
+	require.NoError(t, err)
+	require.Empty(t, resolved)
+	require.NotNil(t, resolved)
+}
+
+func TestPromptWithDependenciesIncludesEveryDependency(t *testing.T) {
+	dependencies := []string{"first", "second", "third"}
+	prompt := promptWithDependencies("task", dependencies, map[string]AgentTaskResult{
+		"first":  {Output: strings.Repeat("a", maxDependencyBytes)},
+		"second": {Output: "second evidence"},
+		"third":  {Output: "third evidence"},
+	})
+	for _, dependency := range dependencies {
+		require.Contains(t, prompt, `"task_id":"`+dependency+`"`)
+	}
+	require.Contains(t, prompt, `"truncated":true`)
+}
+
+func TestAgentRunPersistenceRedactsAndTruncatesOutput(t *testing.T) {
+	dir := t.TempDir()
+	manager := newAgentOrchestrator(dir)
+	secret := "sk-" + strings.Repeat("a", 24)
+	require.NoError(t, manager.persist(AgentRunSnapshot{
+		RunID: "agent-secret", State: AgentRunSucceeded, ParentSessionID: "parent", StartedAt: time.Now().UTC(),
+		Tasks: []AgentTaskResult{{ID: "task", State: AgentTaskSucceeded, Output: secret + " " + strings.Repeat("x", maxPersistedTaskOutputBytes)}},
+	}))
+	data, err := os.ReadFile(filepath.Join(dir, "agent-secret.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(data), secret)
+	require.Contains(t, string(data), "[REDACTED]")
+	var snapshot AgentRunSnapshot
+	require.NoError(t, json.Unmarshal(data, &snapshot))
+	require.True(t, snapshot.Tasks[0].OutputTruncated)
+	require.LessOrEqual(t, len(snapshot.Tasks[0].Output), maxPersistedTaskOutputBytes)
+}
+
+func TestAgentRunLoaderQuarantinesInvalidRecords(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{"), 0o600))
+	mismatched, err := json.Marshal(AgentRunSnapshot{
+		SchemaVersion: currentAgentRunSchemaVersion, RunID: "other", State: AgentRunSucceeded, StartedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mismatch.json"), mismatched, 0o600))
+	future, err := json.Marshal(AgentRunSnapshot{
+		SchemaVersion: currentAgentRunSchemaVersion + 1, RunID: "future", State: AgentRunSucceeded, StartedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "future.json"), future, 0o600))
+
+	manager := newAgentOrchestrator(dir)
+	require.Empty(t, manager.List("parent"))
+	entries, err := os.ReadDir(filepath.Join(dir, "quarantine"))
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+}
+
+func TestAgentRunLoaderRejectsOversizedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oversized.json")
+	require.NoError(t, os.WriteFile(path, make([]byte, maxAgentSnapshotBytes+1), 0o600))
+	_ = newAgentOrchestrator(dir)
+	_, err := os.Stat(path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	entries, err := os.ReadDir(filepath.Join(dir, "quarantine"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+func TestAgentRunLoaderMigratesVersionZero(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := AgentRunSnapshot{RunID: "agent-v0", State: AgentRunSucceeded, ParentSessionID: "parent", StartedAt: time.Now().UTC()}
+	data, err := json.Marshal(snapshot)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "agent-v0.json"), data, 0o600))
+	manager := newAgentOrchestrator(dir)
+	loaded, err := manager.Snapshot("agent-v0", "parent")
+	require.NoError(t, err)
+	require.Equal(t, currentAgentRunSchemaVersion, loaded.SchemaVersion)
+}
+
+func TestAgentRunLoaderPrunesExpiredTerminalRuns(t *testing.T) {
+	dir := t.TempDir()
+	manager := newAgentOrchestrator(dir)
+	finished := time.Now().UTC().Add(-defaultAgentRunRetention - time.Hour)
+	require.NoError(t, manager.persist(AgentRunSnapshot{
+		RunID: "agent-expired", State: AgentRunSucceeded, ParentSessionID: "parent",
+		StartedAt: finished.Add(-time.Hour), FinishedAt: &finished,
+	}))
+	reloaded := newAgentOrchestrator(dir)
+	_, err := reloaded.Snapshot("agent-expired", "parent")
+	require.ErrorContains(t, err, "not found")
+	_, err = os.Stat(filepath.Join(dir, "agent-expired.json"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestAgentRunLoaderRetentionPreservesActiveRuns(t *testing.T) {
+	dir := t.TempDir()
+	manager := newAgentOrchestrator(dir)
+	now := time.Now().UTC()
+	require.NoError(t, manager.persist(AgentRunSnapshot{
+		RunID: "agent-active", State: AgentRunRunning, ParentSessionID: "parent", StartedAt: now,
+	}))
+	require.NoError(t, manager.persist(AgentRunSnapshot{
+		RunID: "agent-terminal", State: AgentRunSucceeded, ParentSessionID: "parent",
+		StartedAt: now.Add(-time.Hour), FinishedAt: &now,
+	}))
+
+	// A zero terminal-history limit must prune the completed run but retain
+	// and recover active work as interrupted.
+	reloaded := newAgentOrchestratorWithRetention(dir, 0)
+	active, err := reloaded.Snapshot("agent-active", "parent")
+	require.NoError(t, err)
+	require.Equal(t, AgentRunInterrupted, active.State)
+	_, err = reloaded.Snapshot("agent-terminal", "parent")
+	require.ErrorContains(t, err, "not found")
+	require.FileExists(t, filepath.Join(dir, "agent-active.json"))
+	require.NoFileExists(t, filepath.Join(dir, "agent-terminal.json"))
+}
+
+func TestAgentRunTerminalPersistenceFailureIsVisible(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "runs")
+	manager := newAgentOrchestrator(dir)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	job, err := manager.Start(t.Context(), AgentRunSnapshot{
+		RunID: "agent-degraded", State: AgentRunQueued, ParentSessionID: "parent", StartedAt: time.Now().UTC(),
+	}, normalizedAgentPlan{Mode: "parallel", Concurrency: 1}, func(_ context.Context, run *agentRun) {
+		run.update(manager, func(snapshot *AgentRunSnapshot) { snapshot.State = AgentRunRunning })
+		close(started)
+		<-release
+		now := time.Now().UTC()
+		run.update(manager, func(snapshot *AgentRunSnapshot) {
+			snapshot.State = AgentRunSucceeded
+			snapshot.FinishedAt = &now
+		})
+	})
+	require.NoError(t, err)
+	<-started
+	require.NoError(t, os.RemoveAll(dir))
+	require.NoError(t, os.WriteFile(dir, []byte("not a directory"), 0o600))
+	close(release)
+	<-job.done
+	snapshot, err := manager.Wait(t.Context(), "agent-degraded", "parent")
+	require.ErrorContains(t, err, "durability degraded")
+	require.Equal(t, "degraded", snapshot.DurabilityStatus)
+	require.NotEmpty(t, snapshot.PersistenceError)
+}
+
+func TestAutomaticTokenBudgetCannotExceedPerTaskMaximum(t *testing.T) {
+	_, err := normalizeAgentPlan(AgentParams{
+		Tasks:       []AgentTask{{ID: "only", Prompt: "work"}},
+		TokenBudget: maxAgentOutputTokens + 1,
+	})
+	require.ErrorContains(t, err, "assigns more than")
+}
+
+func TestOutputTokenStopConditionsUseAggregateOutput(t *testing.T) {
+	conditions := outputTokenStopConditions(5)
+	require.Len(t, conditions, 1)
+	require.False(t, conditions[0]([]fantasy.StepResult{{Usage: fantasy.Usage{InputTokens: 100, OutputTokens: 4}}}))
+	require.True(t, conditions[0]([]fantasy.StepResult{
+		{Usage: fantasy.Usage{InputTokens: 100, OutputTokens: 4}},
+		{Usage: fantasy.Usage{OutputTokens: 1}},
+	}))
+}
+
+func TestOrchestrationQuotaBoundsRecursiveFanout(t *testing.T) {
+	quota := &orchestrationQuota{}
+	require.True(t, quota.reserve(maxAgentTreeTasks, maxAgentTreeOutputTokens))
+	require.False(t, quota.reserve(1, 1))
+
+	quota = &orchestrationQuota{}
+	require.True(t, quota.reserve(1, maxAgentTreeOutputTokens))
+	require.False(t, quota.reserve(1, 1))
+}
+
+func TestAgentWorkspaceToolFailsClosedAfterCWDChange(t *testing.T) {
+	tool := &agentWorkspaceTool{validate: func() error { return errors.New("cwd escaped") }}
+	response, err := tool.Run(t.Context(), fantasy.ToolCall{Name: "view"})
+	require.NoError(t, err)
+	require.True(t, response.IsError)
+	require.Contains(t, response.Content, "workspace validation failed")
+}
+
+func TestAgentRunReportsOutputBudgetSeparatelyFromTotalUsage(t *testing.T) {
+	coord, parentID, providerID := newOrchestrationTestCoordinator(t)
+	agent := newMockAgent(providerID, 256, func(context.Context, SessionAgentCall) (*fantasy.AgentResult, error) {
+		return &fantasy.AgentResult{
+			Response:   fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: "done"}}},
+			TotalUsage: fantasy.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8},
+		}, nil
+	})
+	response := invokeAgentTool(t, coord.newAgentTool(agent), parentID, AgentParams{
+		Tasks: []AgentTask{{ID: "usage", Prompt: "work"}}, TokenBudget: 4,
+	})
+	require.False(t, response.IsError, response.Content)
+	var snapshot AgentRunSnapshot
+	require.NoError(t, json.Unmarshal([]byte(response.Content), &snapshot))
+	require.Equal(t, int64(4), snapshot.OutputTokenBudget)
+	require.Equal(t, int64(3), snapshot.OutputTokensUsed)
+	require.Equal(t, int64(8), snapshot.TotalTokensUsed)
+	require.Equal(t, int64(8), snapshot.TokensUsed)
+}
+
 func ptrTime(value time.Time) *time.Time {
 	return &value
+}
+
+func TestCanceledRunBoundsNonCooperativeWorker(t *testing.T) {
+	coord, parentID, providerID := newOrchestrationTestCoordinator(t)
+	manager := coord.agentOrchestrator()
+	manager.workerDrainTimeout = 20 * time.Millisecond
+	started := make(chan struct{})
+	release := make(chan struct{})
+	agent := newMockAgent(providerID, 256, func(context.Context, SessionAgentCall) (*fantasy.AgentResult, error) {
+		close(started)
+		<-release // Deliberately ignore cancellation.
+		return agentResultWithText("late"), nil
+	})
+	input, err := json.Marshal(AgentParams{Tasks: []AgentTask{{ID: "stubborn", Prompt: "work"}}})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(orchestrationToolContext(t.Context(), parentID))
+	done := make(chan fantasy.ToolResponse, 1)
+	go func() {
+		response, _ := coord.newAgentTool(agent).Run(ctx, fantasy.ToolCall{ID: "stubborn", Name: AgentToolName, Input: string(input)})
+		done <- response
+	}()
+	<-started
+	cancel()
+	select {
+	case response := <-done:
+		require.True(t, response.IsError)
+	case <-time.After(time.Second):
+		t.Fatal("canceled run remained owned by non-cooperative worker")
+	}
+	runs := manager.List(parentID)
+	require.Len(t, runs, 1)
+	_, waitErr := manager.Wait(t.Context(), runs[0].RunID, parentID)
+	require.NoError(t, waitErr)
+	require.Equal(t, int64(1), manager.detachedWorkers.Load())
+	close(release)
+	require.Eventually(t, func() bool { return manager.detachedWorkers.Load() == 0 }, time.Second, 10*time.Millisecond)
+}
+
+func TestCoordinatorCloseRetainsClosedOrchestrator(t *testing.T) {
+	coord, _, _ := newOrchestrationTestCoordinator(t)
+	manager := coord.agentOrchestrator()
+	require.NoError(t, coord.Close())
+	require.Same(t, manager, coord.agentOrchestrator())
+	_, err := manager.Start(t.Context(), AgentRunSnapshot{RunID: "after-close"}, normalizedAgentPlan{}, func(context.Context, *agentRun) {})
+	require.ErrorContains(t, err, "closed")
+}
+
+func TestAgentRunDirectoryIsLockedAcrossProcesses(t *testing.T) {
+	dir := t.TempDir()
+	manager := newAgentOrchestrator(dir)
+	t.Cleanup(func() { require.NoError(t, manager.Close(t.Context())) })
+	release, err := lock.TryFile(filepath.Join(dir, ".lock"))
+	if release != nil {
+		release()
+	}
+	require.ErrorIs(t, err, lock.ErrContended)
+}
+
+func TestPromptWithDependenciesBoundsEncodedBlock(t *testing.T) {
+	results := map[string]AgentTaskResult{
+		"one": {Output: strings.Repeat("<\\n", maxDependencyBytes)},
+		"two": {Output: strings.Repeat("界", maxDependencyBytes)},
+	}
+	prompt := promptWithDependencies("task", []string{"one", "two"}, results)
+	marker := strings.Index(prompt, "BEGIN UNTRUSTED DEPENDENCY DATA")
+	require.NotEqual(t, -1, marker)
+	require.LessOrEqual(t, len(prompt[marker:]), maxDependencyBytes)
+	require.Contains(t, prompt, `"task_id":"one"`)
+	require.Contains(t, prompt, `"task_id":"two"`)
+}
+
+func TestCanonicalSnapshotMatchesReloadedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	manager := newAgentOrchestrator(dir)
+	now := time.Now().UTC()
+	job, err := manager.Start(t.Context(), AgentRunSnapshot{
+		RunID: "canonical", State: AgentRunQueued, ParentSessionID: "parent", StartedAt: now,
+	}, normalizedAgentPlan{Mode: "parallel", Concurrency: 1}, func(_ context.Context, run *agentRun) {
+		run.update(manager, func(snapshot *AgentRunSnapshot) {
+			snapshot.State = AgentRunSucceeded
+			snapshot.FinishedAt = &now
+			snapshot.Tasks = []AgentTaskResult{{ID: "task", State: AgentTaskSucceeded, Output: "password=secret-value"}}
+		})
+		run.seal()
+	})
+	require.NoError(t, err)
+	<-job.done
+	inMemory := job.Snapshot()
+	data, err := os.ReadFile(filepath.Join(dir, "canonical.json"))
+	require.NoError(t, err)
+	var persisted AgentRunSnapshot
+	require.NoError(t, json.Unmarshal(data, &persisted))
+	require.Equal(t, inMemory, persisted)
+	require.NotContains(t, string(data), "secret-value")
 }
 
 func newOrchestrationTestCoordinator(t *testing.T) (*coordinator, string, string) {
