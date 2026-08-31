@@ -11,6 +11,27 @@
 
 <p align="center"><img width="800" alt="Ultra Demo" src="https://github.com/user-attachments/assets/58280caf-851b-470a-b6f7-d5c4ea8a1968" /></p>
 
+## Documentation
+
+- [Security](docs/security.md)
+- [Agent Runs](docs/agent_runs.md)
+- [Operations](docs/operations.md)
+- [Configuration](docs/configuration.md)
+- [Deployment](docs/deployment.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Version Log](docs/version-log.md)
+- [Security Policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Documentation Index](docs/index.md)
+
+### Governance and Releases
+
+Ultra is currently an **Alpha** release. Releases follow semantic
+versioning and are cut from `v*` tags; each release ships version tags,
+checksums, an SBOM, and provenance attestation. See the
+[Version Log](docs/version-log.md) for the changelog and release hygiene
+practices.
+
 ## Features
 
 - **Multi-Model:** choose from a wide range of LLMs or add your own via OpenAI- or Anthropic-compatible APIs

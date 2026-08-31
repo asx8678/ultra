@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  # id-token: write enables Sigstore keyless signing / provenance
+  # attestation for published artifacts.
+  id-token: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run GoReleaser
+        # NOTE: cosign artifact signing is not enabled by default. It
+        # requires externally configured secrets (e.g. COSIGN_KEY_PASSWORD,
+        # and a cosign private key or keyless signing identity) set in the
+        # repository, and the corresponding goreleaser cosign pipeline in
+        # .goreleaser.yml.
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

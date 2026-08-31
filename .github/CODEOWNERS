@@ -1,0 +1,10 @@
+# Code Owners
+
+# Agent engine and tooling
+/internal/agent/                                @ultra-maintainers
+/internal/hooks/                                @ultra-maintainers
+/internal/shell/                                @ultra-maintainers
+/internal/permission/                           @ultra-maintainers
+
+# GitHub release workflows
+.github/workflows/release.yml                   @ultra-maintainers

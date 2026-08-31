@@ -79,5 +79,46 @@ changelog:
       - "^v\\d"
       - "^Merge "
 
+# Modular signing (cosign). Enabled per-release by exporting the signing
+# secret that Keyless signatures are storage-backend driven:
+#
+#   COSIGN_PASSWORD and the tuf/rekor endpoints are read from the environment.
+#   Both blobs and the checksum file are signed when the env secret is present.
+#   Disabled otherwise (no signatures produced) so local/CI dry runs stay
+#   side-effect free.
+#
+# Uncomment and define the secret-driven steps below to enable signing:
+#
+#  signs:
+#    - cmd: cosign
+#      env:
+#        - SIGNING_SECRET=${COSIGN_PRIVATE_KEY}   # injected by the release CI
+#      args:
+#        - sign-blob
+#        - --key=env://SIGNING_SECRET
+#        - --output-signature=${signature}
+#        - ${artifact}
+#      artifacts: all
+#      output: true
+#
+#  docker_signs:
+#    - cmd: cosign
+#      artifacts: all
+#      output: true
+#      args:
+#        - sign
+#        - --key=env://SIGNING_SECRET
+#        - ${artifact}
+#
+# Provenance (SLSA level 3) placeholder. Activate by uploading the
+# generated spdx/sbom and the cosign certificates+signatures to the
+# attestation registry used by your release pipeline:
+#
+#  provenance:
+#    enabled: true
+#    strict: true
+#    uploads:
+#      - to: image
+#
 release:
   prerelease: auto
