@@ -5,6 +5,10 @@
 <p align="center">Your new coding bestie, now available in your favourite terminal.<br />Your tools, your code, and your workflows, wired into your LLM of choice.</p>
 <p align="center">终端里的编程新搭档，<br />无缝接入你的工具、代码与工作流，全面兼容主流 LLM 模型。</p>
 
+> [!WARNING]
+> **Alpha software:** APIs, configuration, and persisted run formats may change.
+> Ultra is not yet recommended for unattended production workloads.
+
 <p align="center"><img width="800" alt="Ultra Demo" src="https://github.com/user-attachments/assets/58280caf-851b-470a-b6f7-d5c4ea8a1968" /></p>
 
 ## Features
@@ -16,7 +20,7 @@
 - **Repository-Aware:** a native cross-language semantic graph provides token-bounded architecture sketches, focused neighborhoods, progressive context, and change-impact analysis
 - **Extensible:** add capabilities via MCPs (`http`, `stdio`, and `sse`)
 - **Works Everywhere:** first-class support in every terminal on macOS, Linux, Windows (PowerShell and WSL), Android, FreeBSD, OpenBSD, and NetBSD
-- **Industrial Grade:** built on the Charm ecosystem, powering 25k+ applications, from leading open source projects to business-critical infrastructure
+- **Charm-Based:** built with the established Charm terminal ecosystem
 
 ## Installation
 
@@ -888,7 +892,6 @@ See the [contributing guide](https://github.com/asx8678/ultra?tab=contributing-o
 
 ## License
 
-[FSL-1.1-MIT](https://github.com/asx8678/ultra/raw/main/LICENSE.md)
-
+Ultra is licensed under [FSL-1.1-MIT](https://github.com/asx8678/ultra/raw/main/LICENSE.md), not a conventional permissive open-source license. Internal use, non-commercial education and research, and other non-competing uses are permitted. Making the software available as a competing commercial product or service is restricted. Each software version converts to the MIT license on the second anniversary of the date that version is made available. Contributions are distributed under the repository's applicable license terms; review `LICENSE.md` before contributing or redistributing.
 
 Ultra is derived from Charmbracelet Crush. Required upstream copyright and license terms remain in `LICENSE.md`.

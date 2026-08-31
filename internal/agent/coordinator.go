@@ -895,12 +895,16 @@ func (c *coordinator) Close() error {
 	c.orchestratorMu.Unlock()
 	// Close outside orchestratorMu: Close drains active runs, and a recursive
 	// worker needs the mutex to reach the orchestrator mid-call.
+	var closeErrors []error
 	if orchestrator != nil {
-		orchestrator.Close()
+		closeCtx, cancel := context.WithTimeout(context.Background(), defaultOrchestratorCloseWait)
+		if err := orchestrator.Close(closeCtx); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+		cancel()
 	}
 
 	c.repoGraphMu.Lock()
-	var closeErrors []error
 	for root, manager := range c.repoGraphs {
 		if err := manager.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close repository graph %q: %w", root, err))
